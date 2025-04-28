@@ -1,0 +1,81 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+def read_matrix_from_file(filename, n):
+    with open(filename, 'r') as f:
+        return np.array([list(map(int, line.split()))[:n] for line in f][:n])
+
+def main():
+    k = int(input("Введите k: "))
+    n = int(input("Введите размер матрицы N: "))
+
+    A = read_matrix_from_file('matrix.txt', n)
+    print("Исходная матрица A:\n", A)
+
+    F = A.copy()
+    half = n // 2
+
+    # Разбиение
+    B = F[:half, :half].copy()  # Верхняя левая часть
+    C = F[:half, half:].copy()  # Верхняя правая часть
+    E = F[half:, half:].copy()  # Нижняя правая часть
+
+    # Подсчет количества нулей в B и E
+    zero_count_B = np.count_nonzero(B == 0)
+    zero_count_E = np.count_nonzero(E == 0)
+
+    if zero_count_B > zero_count_E:
+        F[:half, :half], F[:half, half:] = np.fliplr(C.T).copy(), np.fliplr(B.T).copy()  # Симметрично меняем B и C
+    else:
+        F[:half, :half], F[half:, half:] = E.copy(), B.copy()  # Несимметрично меняем B и E
+
+    print("\nПреобразованная матрица F:\n", F)
+
+    # Вычисление определителя A и суммы диагональных элементов F
+    det_A = np.linalg.det(A)
+    trace_F = np.trace(F)
+
+    # Вычисление выражения
+    if det_A > trace_F:
+        result = A @ A.T - k * F
+        print("\nВычисление: A * A^T - K * F\n")
+    else:
+        try:
+            A_inv = np.linalg.inv(A)
+            F_inv = np.linalg.inv(F)
+            G = np.tril(A)
+            result = (A_inv + G - F_inv) * k
+            print("\nВычисление: (A⁻¹ + G - F⁻¹) * K\n")
+        except np.linalg.LinAlgError:
+            print("Матрица A или F вырождена, невозможно вычислить обратную матрицу.")
+            return
+
+    print("Результат вычислений:\n", result)
+
+    plt.figure(figsize=(15, 5))
+
+    plt.subplot(131)
+    plt.imshow(F, cmap='viridis')
+    plt.colorbar()
+    plt.title("Матрица F (тепловая карта)")
+
+    plt.subplot(132)
+    row_sums = F.sum(axis=1)
+    plt.bar(range(len(row_sums)), row_sums, label="Сумма по строкам")  #столбы
+    plt.title("Сумма по строкам (столбчатая)")
+    plt.grid(True)
+    plt.legend()
+
+    plt.subplot(133)
+    col_sums = F.sum(axis=0)
+    plt.plot(col_sums, 's-', label="Сумма по столбцам")  # линейный
+    plt.title("Сумма по столбцам (линейный)")
+    plt.grid(True)
+    plt.legend()
+
+    plt.tight_layout()
+    print("График сейчас должен отобразиться...")
+    plt.show()
+
+if __name__ == "__main__":
+    main()
