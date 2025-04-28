@@ -1,0 +1,26 @@
+import timeit
+def distribute_tasks_recursive(K, N):
+    assignments = []
+
+    def backtrack(current, used):
+        if len(current) == K:
+            assignments.append(current[:])
+            return
+        for i in range(1, N + 1):
+            if i not in used:
+                used.add(i)
+                current.append(i)
+                backtrack(current, used)
+                current.pop()
+                used.remove(i)
+
+    backtrack([], set())
+    return assignments
+K = int(input("Введите количество работ (K): "))
+N = int(input("Введите количество сотрудников (N): "))
+start_time = timeit.default_timer()
+assignments = distribute_tasks_recursive(K, N)
+time_taken = timeit.default_timer() - start_time
+print(f"Количество вариантов: {len(assignments)}")
+print("Все варианты:", assignments)
+print(f"Время выполнения: {time_taken:.6f} сек")
