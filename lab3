@@ -1,0 +1,34 @@
+import copy
+def read_matrix(matrix):
+    with open(matrix, 'r') as file:
+        return [list(map(int, line.split())) for line in file]
+def print_matrix(matrix, title="Матрица"):
+    print(title + ":")
+    for row in matrix:
+        print(' '.join(map(str, row)))
+k = int(input("Введите K: "))
+n = int(input("Введите N: "))
+A = read_matrix('matrix.txt')
+F = copy.deepcopy(A)
+# Определение областей
+area2 = [F[-1][i] for i in range(1, n-1)]
+area4 = [F[0][i] for i in range(1, n-1)]
+# Проверка условия и замена областей
+if min(area2[::2]) > sum(area4[1::2]):
+    # Меняем области 1 и 2 симметрично
+    for i in range(1, n-1):
+        F[i][-1], F[-1][i] = F[-1][i], F[i][-1]
+else:
+    # Меняем области 2 и 4 несимметрично
+    F[-1][1:n-1], F[0][1:n-1] = F[0][1:n-1], F[-1][1:n-1]
+# Вывод матриц
+print_matrix(A, "Матрица A")
+print_matrix(F, "Матрица F после преобразований")
+# Вычисление
+Fk = [[F[i][j] * k for j in range(n)] for i in range(n)]  # K * F
+KFA = [[sum(Fk[i][m] * A[m][j] for m in range(n)) for j in range(n)] for i in range(n)]  # (K * F) * A
+AT = [[A[j][i] for j in range(n)] for i in range(n)]  # Транспонированная A
+KAT = [[AT[i][j] * k for j in range(n)] for i in range(n)]  # K * A^T
+result = [[KFA[i][j] - KAT[i][j] for j in range(n)] for i in range(n)]  # Результат
+
+print_matrix(result, "Результат (K * F) * A - K * A^T")
