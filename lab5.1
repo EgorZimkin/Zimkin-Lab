@@ -1,0 +1,20 @@
+import timeit
+from itertools import permutations
+
+def distribute_tasks(K, N):
+    assignments = []
+    # возможные назначения
+    for p in permutations(range(1, N + 1), K):
+        assignments.append(list(p))
+    return assignments
+
+K = int(input("Введите количество работ (K): "))
+N = int(input("Введите количество сотрудников (N): "))
+
+start_time = timeit.default_timer()
+assignments = distribute_tasks(K, N)
+time_taken = timeit.default_timer() - start_time
+
+print(f"Количество вариантов: {len(assignments)}")
+print("Все варианты:", assignments)
+print(f"Время выполнения: {time_taken:.6f} сек")
