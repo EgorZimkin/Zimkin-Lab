@@ -1,0 +1,8 @@
+import re
+with open("input.txt") as f:
+    text = f.read()
+    valid_octals = re.findall(r'\b[0-7]*1[0-7]\b', text)
+    #valid_octals = [t for t in valid_octals if int(t, 8) <= 1023]
+if valid_octals:
+    nums = [int(x, 8) for x in valid_octals]
+    print(" ".join(x[:-2] for x in valid_octals), f"среднее {int((min(nums) + max(nums)) / 2)}")
