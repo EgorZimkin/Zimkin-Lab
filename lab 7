@@ -1,0 +1,93 @@
+import tkinter as tk
+from tkinter import messagebox, scrolledtext
+from itertools import permutations
+import time
+
+
+def evaluate_distribution(distribution, employee_levels, task_difficulties):
+    total_score = 0
+    for task_idx, emp in enumerate(distribution):
+        emp_level = employee_levels[emp - 1]
+        task_difficulty = task_difficulties[task_idx]
+        if emp_level < task_difficulty:
+            return -1  # недопустимо
+        total_score += emp_level - task_difficulty
+    return total_score
+
+
+def run():
+    try:
+        n = int(entry_n.get())
+        k = int(entry_k.get())
+        employee_levels = list(map(int, entry_levels.get().split()))
+        task_difficulties = list(map(int, entry_difficulties.get().split()))
+
+        if len(employee_levels) != n:
+            raise ValueError("Количество квалификаций должно совпадать с N")
+        if len(task_difficulties) != k:
+            raise ValueError("Количество сложностей должно совпадать с K")
+        if k > n:
+            raise ValueError("Количество работ не может превышать количество сотрудников")
+
+        start_time = time.time()
+
+        assignments = list(permutations(range(1, n + 1), k))
+        best_score = -1
+        best_assignment = None
+
+        # Создаем новое окно для вывода результатов
+        result_window = tk.Toplevel(root)
+        result_window.title("Результаты распределения")
+
+        # Создаем скроллируемое текстовое поле
+        output_text = scrolledtext.ScrolledText(result_window, height=25, width=80, wrap=tk.WORD)
+        output_text.pack(padx=10, pady=10)
+
+        output_text.insert(tk.END, "Возможные распределения:\n")
+
+        for a in assignments:
+            score = evaluate_distribution(a, employee_levels, task_difficulties)
+            if score == -1:
+                output_text.insert(tk.END, f"{a} — Недопустимо\n")
+            else:
+                output_text.insert(tk.END, f"{a} — Эффективность: {score}\n")
+                if score > best_score:
+                    best_score = score
+                    best_assignment = a
+
+        time_taken = time.time() - start_time
+
+        if best_assignment:
+            output_text.insert(tk.END, f"\nЛучшее распределение: {best_assignment} с эффективностью {best_score}\n")
+        else:
+            output_text.insert(tk.END, "\nНет допустимых распределений.\n")
+
+        output_text.insert(tk.END, f"\nВремя выполнения: {time_taken:.6f} сек\n")
+
+    except ValueError as e:
+        messagebox.showerror("Ошибка ввода", str(e))
+
+
+# Основное GUI
+root = tk.Tk()
+root.title("Распределение работ по сотрудникам")
+
+tk.Label(root, text="Количество сотрудников (N):").grid(row=0, column=0, sticky="w")
+entry_n = tk.Entry(root)
+entry_n.grid(row=0, column=1)
+
+tk.Label(root, text="Количество работ (K):").grid(row=1, column=0, sticky="w")
+entry_k = tk.Entry(root)
+entry_k.grid(row=1, column=1)
+
+tk.Label(root, text="Квалификации сотрудников (через пробел):").grid(row=2, column=0, sticky="w")
+entry_levels = tk.Entry(root, width=40)
+entry_levels.grid(row=2, column=1)
+
+tk.Label(root, text="Сложности работ (через пробел):").grid(row=3, column=0, sticky="w")
+entry_difficulties = tk.Entry(root, width=40)
+entry_difficulties.grid(row=3, column=1)
+
+tk.Button(root, text="Рассчитать", command=run).grid(row=4, column=0, columnspan=2, pady=10)
+
+root.mainloop()
