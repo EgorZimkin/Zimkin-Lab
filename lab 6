@@ -1,0 +1,90 @@
+import numpy as np
+import timeit
+import matplotlib.pyplot as plt
+from math import factorial
+
+def get_sign(n):
+#+1 для нечетных n и -1 для четных.
+    return 1 if n % 2 == 1 else -1
+
+def F_recursive(n):
+    if n < 1:
+        raise ValueError("n должно быть положительным целым числом")
+    if n == 1:
+        return 1.0
+    sign = get_sign(n)
+    return sign * n * (F_recursive(n - 1) - 2 * G_recursive(n - 1))
+
+def G_recursive(n):
+    if n < 1:
+        raise ValueError("n должно быть положительным целым числом")
+    if n == 1:
+        return 1.0
+    sign = get_sign(n)
+    return sign * (-F_recursive(n - 1)) + factorial(2 * n - 2)
+
+def iterative(n):
+    if n < 1:
+        raise ValueError("n должно быть положительным целым числом")
+    if n == 1:
+        return (1.0, 1.0)
+
+    F_prev, G_prev = 1.0, 1.0
+
+    for i in range(2, n + 1):
+        sign = get_sign(i)
+        F_new = sign * i * (F_prev - 2 * G_prev)
+        G_new = sign * (-F_prev) + factorial(2 * i - 2)
+        F_prev, G_prev = F_new, G_new
+
+    return (F_prev, G_prev)
+
+def measure_time(func, n, number=1):
+    stmt = lambda: func(n)
+    t = timeit.timeit(stmt, number=number)
+    return t / number
+
+def main():
+    ns = np.arange(1, 21)
+    f_recursive_times = []
+    g_recursive_times = []
+    f_iterative_times = []
+    g_iterative_times = []
+
+    for n in ns:
+        try:
+            t = measure_time(F_recursive, n)
+            f_recursive_times.append(t)
+        except (RecursionError, OverflowError):
+            f_recursive_times.append(np.nan)
+
+        try:
+            t = measure_time(G_recursive, n)
+            g_recursive_times.append(t)
+        except (RecursionError, OverflowError):
+            g_recursive_times.append(np.nan)
+
+        t = measure_time(lambda n=n: iterative(n)[0], n)
+        f_iterative_times.append(t)
+
+        t = measure_time(lambda n=n: iterative(n)[1], n)
+        g_iterative_times.append(t)
+
+    print("\n n | F_rec_time | G_rec_time | F_iter_time | G_iter_time")
+    for i in range(len(ns)):
+        print(
+            f"{ns[i]:2d} | {f_recursive_times[i]:10.6f} | {g_recursive_times[i]:10.6f} | {f_iterative_times[i]:11.6f} | {g_iterative_times[i]:11.6f}")
+
+    plt.figure(figsize=(12, 6))
+    plt.plot(ns, f_iterative_times, 'r-', label='F iter')
+    plt.plot(ns, g_iterative_times, 'b-', label='G iter')
+    plt.xlabel('n')
+    plt.ylabel('Time (seconds)')
+    plt.title('Сравнение времени выполнения (вариант 34)')
+    plt.legend()
+    plt.grid(True)
+    plt.yscale('log')
+    plt.show()
+
+if __name__ == "__main__":
+    main()
