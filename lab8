@@ -1,0 +1,115 @@
+import csv
+import math
+from tkinter import *
+from tkinter import filedialog, messagebox
+
+
+class Segment:
+    def __init__(self, x1, y1, x2, y2):
+        self.x1 = int(x1)
+        self.y1 = int(y1)
+        self.x2 = int(x2)
+        self.y2 = int(y2)
+        self.color = "black"
+
+    def length(self):
+        return math.hypot(self.x2 - self.x1, self.y2 - self.y1)
+
+    def move(self, dx, dy):
+        self.x1 += dx
+        self.y1 += dy
+        self.x2 += dx
+        self.y2 += dy
+
+    def assign_color(self):
+        if self.length() < 50:
+            self.color = "green"
+        elif self.length() < 150:
+            self.color = "orange"
+        else:
+            self.color = "red"
+
+    def split(self, parts=3, offset_step=30):
+        dx = (self.x2 - self.x1) / parts
+        dy = (self.y2 - self.y1) / parts
+        segments = []
+        for i in range(parts):
+            x_start = self.x1 + dx * i
+            y_start = self.y1 + dy * i
+            x_end = self.x1 + dx * (i + 1)
+            y_end = self.y1 + dy * (i + 1)
+
+            # Добавим отъезд (смещение) — каждый отрезок дальше
+            offset_x = i * offset_step
+            offset_y = i * offset_step
+
+            new_seg = Segment(x_start + offset_x, y_start + offset_y,
+                              x_end + offset_x, y_end + offset_y)
+            new_seg.color = self.color
+            segments.append(new_seg)
+        return segments
+
+
+class SegmentApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Отрезки на плоскости")
+        self.canvas = Canvas(root, width=1000, height=800, bg="white")
+        self.canvas.pack()
+
+        self.segments = []
+
+        frame = Frame(root)
+        frame.pack()
+
+        Button(frame, text="Загрузить", command=self.load_segments).pack(side=LEFT, padx=5)
+        Button(frame, text="Визуализация", command=self.visualize).pack(side=LEFT, padx=5)
+        Button(frame, text="Раскрасить", command=self.colorize).pack(side=LEFT, padx=5)
+        Button(frame, text="Сдвинуть (100,100)", command=lambda: self.move_all(100, 100)).pack(side=LEFT, padx=5)
+        Button(frame, text="Разбить", command=self.split_segments).pack(side=LEFT, padx=5)
+
+    def load_segments(self):
+        filepath = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv")])
+        if not filepath:
+            return
+
+        self.segments.clear()
+        try:
+            with open(filepath, newline='') as csvfile:
+                reader = csv.reader(csvfile)
+                next(reader)
+                for row in reader:
+                    if len(row) != 4:
+                        continue
+                    self.segments.append(Segment(*row))
+            messagebox.showinfo("Успех", "Файл успешно загружен")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Ошибка загрузки: {e}")
+
+    def visualize(self):
+        self.canvas.delete("all")
+        for seg in self.segments:
+            self.canvas.create_line(seg.x1, seg.y1, seg.x2, seg.y2, fill=seg.color, width=2)
+
+    def colorize(self):
+        for seg in self.segments:
+            seg.assign_color()
+        self.visualize()
+
+    def move_all(self, dx, dy):
+        for seg in self.segments:
+            seg.move(dx, dy)
+        self.visualize()
+
+    def split_segments(self):
+        new_segments = []
+        for seg in self.segments:
+            new_segments.extend(seg.split(parts=3, offset_step=40)) 
+        self.segments = new_segments
+        self.visualize()
+
+
+if __name__ == "__main__":
+    root = Tk()
+    app = SegmentApp(root)
+    root.mainloop()
