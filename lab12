@@ -1,0 +1,157 @@
+import tkinter as tk
+import random
+from collections import deque
+
+CELL = 32
+ROWS, COLS = 10, 10
+SHIP_SIZES = [4, 3, 3, 2, 2, 1, 1]
+
+class Board:
+    def __init__(self):
+        self.g = [[-1]*COLS for _ in range(ROWS)]
+        self.ships = []
+        self.occ = set()
+    def place(self, r, c, s, h):
+        cells = [(r, c+i) if h else (r+i, c) for i in range(s)]
+        if any(not (0 <= rr < ROWS and 0 <= cc < COLS) for rr, cc in cells): return 0
+        for rr, cc in cells:
+            for dr in (-1, 0, 1):
+                for dc in (-1, 0, 1):
+                    if (rr+dr, cc+dc) in self.occ: return 0
+        for rr, cc in cells:
+            self.occ.add((rr, cc))
+            self.g[rr][cc] = 2
+        self.ships.append(set(cells))
+        return 1
+    def randomize(self):
+        self.__init__()
+        for s in SHIP_SIZES:
+            while not self.place(random.randrange(ROWS), random.randrange(COLS), s, random.choice([0, 1])): ...
+        return self
+    def shot(self, r, c):
+        if self.g[r][c] in (0, 1): return None
+        if self.g[r][c] == 2:
+            self.g[r][c] = 1
+            for s in self.ships:
+                if (r, c) in s:
+                    s.remove((r, c))
+                    if len(s) == 0:
+
+                        self.mark_around_dead_ship()
+                        return ('killed', 1)
+                    return ('wounded', 0)
+        self.g[r][c] = 0
+        return ('miss', 0)
+    def mark_around_dead_ship(self):
+        for s in self.ships:
+            if len(s) == 0:
+                for cell in s:
+                    r, c = cell
+                    for dr in (-1, 0, 1):
+                        for dc in (-1, 0, 1):
+                            rr, cc = r + dr, c + dc
+                            if 0 <= rr < ROWS and 0 <= cc < COLS and self.g[rr][cc] == -1:
+                                self.g[rr][cc] = 0
+        # удаляем пустые списки (чтобы не дублировать)
+        self.ships = [s for s in self.ships if len(s) > 0]
+    def dead(self): return all(len(s) == 0 for s in self.ships)
+
+class Bot:
+    def __init__(self):
+        self.k = [[-1]*COLS for _ in range(ROWS)]
+        self.q = deque()
+        self.par = [(r, c) for r in range(ROWS) for c in range(COLS) if (r+c) % 2 == 0]
+        random.shuffle(self.par)
+    def mark(self, r, c, res):
+        if res[0] == 'miss': self.k[r][c] = 0
+        else:
+            self.k[r][c] = 1
+            for dr, dc in ((1,0),(-1,0),(0,1),(0,-1)):
+                nr, nc = r+dr, c+dc
+                if 0 <= nr < ROWS and 0 <= nc < COLS and self.k[nr][nc] == -1:
+                    self.q.appendleft((nr, nc))
+    def pick(self):
+        while self.q:
+            r, c = self.q.popleft()
+            if self.k[r][c] == -1: return r, c
+        for r, c in self.par:
+            if self.k[r][c] == -1: return r, c
+        for r in range(ROWS):
+            for c in range(COLS):
+                if self.k[r][c] == -1: return r, c
+
+class Game:
+    def __init__(self, root):
+        self.root = root
+        self.canvas = tk.Canvas(root, width=720, height=420, bg="white")
+        self.canvas.pack()
+        self.p1 = Board().randomize()
+        self.p2 = Board().randomize()
+        self.bot = Bot()
+        self.turn = 1
+        self.msg_player = ""
+        self.msg_bot = ""
+        self.canvas.bind("<Button-1>", self.click)
+        self.draw()
+    def draw(self):
+        self.canvas.delete("all")
+        ox1, oy1 = 20, 20
+        ox2, oy2 = 380, 20
+        for brd, ox, oy, show in [(self.p1, ox1, oy1, 1), (self.p2, ox2, oy2, 0)]:
+            for r in range(ROWS):
+                for c in range(COLS):
+                    x1 = ox + c * CELL
+                    y1 = oy + r * CELL
+                    x2 = x1 + CELL
+                    y2 = y1 + CELL
+                    val = brd.g[r][c]
+                    self.canvas.create_rectangle(x1, y1, x2, y2, outline="black", fill="white")
+                    if val == 0:
+                        self.canvas.create_text((x1+x2)//2, (y1+y2)//2, text="•", font="Arial 20", fill="gray")
+                    elif val == 1:self.canvas.create_text((x1+x2)//2, (y1+y2)//2, text="✖", font="Arial 16 bold", fill="red")
+                    elif val == 2 and show:
+                        self.canvas.create_text((x1+x2)//2, (y1+y2)//2, text="■", font="Arial 14", fill="black")
+        self.canvas.create_text(180, 360, text="Игрок", font="Arial 12")
+        self.canvas.create_text(540, 360, text="Бот", font="Arial 12")
+        self.canvas.create_text(180, 385, text=f"Игрок: {self.msg_player}", fill="black", font="Arial 12 bold")
+        self.canvas.create_text(540, 385, text=f"Бот: {self.msg_bot}", fill="black", font="Arial 12 bold")
+    def click(self, e):
+        if self.turn != 1: return
+        if not (380 <= e.x < 380 + COLS * CELL and 20 <= e.y < 20 + ROWS * CELL): return
+        c = (e.x - 380) // CELL
+        r = (e.y - 20) // CELL
+        res = self.p2.shot(r, c)
+        if not res:
+            self.msg_player = "уже стреляли"
+            return
+        self.msg_player = {"miss": "мимо", "wounded": "ранен", "killed": "убит"}[res[0]]
+        self.draw()
+        if self.p2.dead():
+            self.end("Ты победил!")
+            return
+        if res[0] == "miss":
+            self.turn = 2
+            self.root.after(600, self.loop)
+    def loop(self):
+        if self.turn == 2:
+            r, c = self.bot.pick()
+            res = self.p1.shot(r, c)
+            if not res:
+                self.bot.k[r][c] = 0
+            else:
+                self.bot.mark(r, c, res)
+                self.msg_bot = {"miss": "мимо", "wounded": "ранен", "killed": "убит"}[res[0]]
+                self.draw()
+                if self.p1.dead():
+                    self.end("Бот победил!")
+                    return
+                if res[0] == "miss": self.turn = 1
+                else: self.root.after(600, self.loop)
+    def end(self, text):
+        self.canvas.delete("all")
+        self.canvas.create_text(360, 200, text=text, fill="black", font="Arial 24 bold")
+
+root = tk.Tk()
+root.title("Морской бой")
+Game(root)
+root.mainloop()
