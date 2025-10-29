@@ -1,0 +1,175 @@
+import tkinter as tk
+from tkinter import messagebox
+import random, time
+
+class MazeGame:
+    def __init__(self, root, cols=21, rows=15, cell_size=28, time_limit=60):
+        self.root = root
+        self.cols, self.rows = cols | 1, rows | 1
+        self.size = cell_size
+        self.time_limit = time_limit
+        self.root.title("Паук — быстрое дерево решений")
+
+       
+        top = tk.Frame(root)
+        top.pack(side=tk.TOP, fill=tk.X)
+        self.timer_lbl = tk.Label(top, text="", font=("Segoe UI", 12))
+        self.timer_lbl.pack(side=tk.LEFT, padx=6)
+        tk.Button(top, text="Новый лабиринт", command=self.reset).pack(side=tk.LEFT, padx=5)
+        tk.Button(top, text="Старт", command=self.start_dfs).pack(side=tk.LEFT, padx=5)
+
+        self.canvas = tk.Canvas(root, width=self.cols * self.size, height=self.rows * self.size, bg="#2e3440")
+        self.canvas.pack()
+        self.reset()
+        self.tick_timer()
+
+   
+    def reset(self):
+        self.remaining = self.time_limit
+        self.running = False
+        self.game_over = False
+        self.start = (1, 1)
+        self.exit = (self.cols - 2, self.rows - 2)
+        self.generate_maze()
+        self.draw_maze()
+        self.draw_start_exit()
+        self.timer_lbl.config(text=f"Время: {self.remaining:02d} с")
+
+   
+    def generate_maze(self):
+        w, h = self.cols, self.rows
+        self.grid = [[1] * w for _ in range(h)]
+        stack = [self.start]
+        self.grid[self.start[1]][self.start[0]] = 0
+
+        def neighbors(x, y):
+            dirs = [(2, 0), (-2, 0), (0, 2), (0, -2)]
+            random.shuffle(dirs)
+            for dx, dy in dirs:
+                nx, ny = x + dx, y + dy
+                if 1 <= nx < w - 1 and 1 <= ny < h - 1 and self.grid[ny][nx]:
+                    yield nx, ny, dx, dy
+
+        while stack:
+            x, y = stack[-1]
+            for nx, ny, dx, dy in neighbors(x, y):
+                self.grid[y + dy // 2][x + dx // 2] = 0
+                self.grid[ny][nx] = 0
+                stack.append((nx, ny))
+                break
+            else:
+                stack.pop()
+
+    def draw_maze(self):
+        self.canvas.delete("all")
+        for y in range(self.rows):
+            for x in range(self.cols):
+                color = "#3b4252" if self.grid[y][x] else "#eceff4"
+                self.canvas.create_rectangle(
+                    x * self.size, y * self.size,
+                    (x + 1) * self.size, (y + 1) * self.size,
+                    fill=color, outline=""
+                )
+
+    def draw_start_exit(self):
+        sx, sy = self.start
+        ex, ey = self.exit
+        self.canvas.create_oval(*self.center((sx, sy), 8), fill="#a3be8c", outline="")
+        self.canvas.create_rectangle(*self.center((ex, ey), 10), fill="#bf616a", outline="")
+
+    def center(self, pos, r):
+        x, y = pos
+        cx, cy = x * self.size + self.size / 2, y * self.size + self.size / 2
+        return cx - r, cy - r, cx + r, cy + r
+
+    
+    def tick_timer(self):
+        if not self.game_over:
+            self.remaining = max(0, self.remaining - 1)
+            self.timer_lbl.config(text=f"Время: {self.remaining:02d} с")
+            if self.remaining == 0:
+                self.end_game(False)
+        self.root.after(1000, self.tick_timer)
+
+   
+    def start_dfs(self):
+        if self.running or self.game_over:
+            return
+        self.running = True
+        self.start_time = time.time()
+        self.visited = set()
+        self.parent = {}
+        self.stack = [self.start]
+        self._dfs_step()
+
+    def _dfs_step(self):
+        if not self.running or self.game_over:
+            return
+        if not self.stack:
+            self.end_game(False)
+            return
+
+        current = self.stack[-1]
+        self.visited.add(current)
+        x, y = current
+
+        
+        self.canvas.create_oval(*self.center(current, 5), fill="#5e81ac", outline="", tags="trace")
+
+       
+        if current == self.exit:
+            self.running = False
+            elapsed = time.time() - self.start_time
+            self.highlight_path()
+            self.end_game(True, elapsed)
+            return
+
+        
+        neigh = [(x + dx, y + dy) for dx, dy in [(1,0),(-1,0),(0,1),(0,-1)]
+                 if 0 <= x + dx < self.cols and 0 <= y + dy < self.rows and not self.grid[y + dy][x + dx]]
+        unvisited = [n for n in neigh if n not in self.visited]
+
+        if unvisited:
+            nxt = random.choice(unvisited)
+            self.parent[nxt] = current
+            self.stack.append(nxt)
+        else:
+            # Красная точка — тупик
+            dead_end = self.stack.pop()
+            self.canvas.create_oval(*self.center(dead_end, 5), fill="#bf616a", outline="", tags="deadend")
+
+        
+        self.root.after(17, self._dfs_step)
+
+    
+    def highlight_path(self):
+        node = self.exit
+        path = []
+        while node in self.parent:
+            path.append(node)
+            node = self.parent[node]
+        path.append(self.start)
+        path.reverse()
+
+       
+        for (x, y) in path:
+            cx, cy = x * self.size + self.size / 2, y * self.size + self.size / 2
+            self.canvas.create_oval(cx - 5, cy - 5, cx + 5, cy + 5, fill="#a3be8c", outline="")
+        self.canvas.update()
+
+    
+    def end_game(self, win, elapsed=0):
+        if self.game_over:
+            return
+        self.game_over = True
+        self.running = False
+        if win:
+            self.timer_lbl.config(text=f"Паук выбрался! Время: {elapsed:.2f} сек")
+            messagebox.showinfo("Победа!", "Паук нашёл выход!")
+        else:
+            messagebox.showinfo("Проигрыш", "Паук не успел выбраться!")
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    MazeGame(root, cols=21, rows=15, cell_size=28, time_limit=60)
+    root.mainloop()
