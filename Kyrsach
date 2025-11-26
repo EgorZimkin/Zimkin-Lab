@@ -1,0 +1,559 @@
+# nardys_full.py
+# Полнофункциональный прототип "НАРДЫ" (русский вариант) для курсовой по АИСД
+# Реализовано: регистрация/авторизация (файл l_p.txt, base64 шифрование),
+# GUI tkinter, логика ходов с кубиками, использование значений кубиков (включая дубль),
+# бар (побитые шашки), вынос (bearing off), проверка доступности ходов, оценочная функция,
+# проверка конца игры, базовые unit-тесты для ключевых функций.
+#
+# Автор (шаблон будет заполнен в пояснительной записке): Зимкин Егор, ИСТбд-23
+#
+# Соответствие методичке: хранение пользователей в текстовом файле, однофайловый модуль,
+# использование tkinter, набор обязательных алгоритмов (шифрование, проверка хода, проверка конца игры).
+#
+# Примечание: правила нард имеют множество вариаций. Здесь реализован классический набор правил:
+#  - Два игрока: Белые (player=1) и Чёрные (player=-1).
+#  - Белые идут от точки 0 к 23 (вправо), Чёрные — от 23 к 0 (влево).
+#  - Начальная расстановка по заданию: ВСЕ шашки игрока в одном столбце в начале:
+#      Белые: 15 шашек на пункте 0; Чёрные: 15 шашек на пункте 23.
+#  - Кубики: два кубика; дубль = 4 одинаковых ходa.
+#  - Бар реализован: побитые оказываются на бар и должны входить в игру прежде, чем обычные ходы.
+#  - Вынос (bearing off) реализован: возможен когда все шашки игрока в домашней доске.
+#  - Проверка наличия ходов по значениям кубиков. Если ходов нет — ход пропускается.
+#
+# Ограничения/упрощения:
+#  - Нет ИИ (игра между людьми локально); методичка требовала однопользовательный вариант как минимум,
+#    но вы просили двухпользовательский вариант для оценки 4 — реализовано.
+#  - Сохранение/загрузка реализовано простым JSON (в отдельный файл), но документация/ТЗ будут оформлены отдельно.
+#
+# Запустить: python nardys_full.py
+
+import tkinter as tk
+from tkinter import messagebox, filedialog
+import base64, os, json, random, copy
+from functools import partial
+import unittest
+
+USERS_FILE = "l_p.txt"
+DEFAULT_SAVE = "nardys_save.json"
+VERSION = "1.0 (курс. проект, логика)"
+
+# --------------------- Утилиты: шифрование / пользователи ---------------------
+def encrypt(text: str) -> str:
+    """Простейшее шифрование (base64) — для выполнения требования ТЗ (зашифрованное хранение)."""
+    return base64.b64encode(text.encode('utf-8')).decode('ascii')
+
+def decrypt(b64: str) -> str:
+    try:
+        return base64.b64decode(b64.encode('ascii')).decode('utf-8')
+    except Exception:
+        return ""
+
+def load_users():
+    users = {}
+    if not os.path.exists(USERS_FILE):
+        return users
+    with open(USERS_FILE, "r", encoding="utf-8") as f:
+        tokens = f.read().split()
+    i = 0
+    while i + 1 < len(tokens):
+        users[tokens[i]] = tokens[i+1]
+        i += 2
+    return users
+
+def save_user(login, password):
+    enc = encrypt(password)
+    with open(USERS_FILE, "a", encoding="utf-8") as f:
+        f.write(f"{login} {enc} ")
+
+# --------------------- Модель игры ---------------------
+# Точки 0..23 — всего 24
+# Каждая точка: dict {'owner': 0/1/-1, 'count': n}
+# Бар: {'white': n, 'black': n}
+# borne_off: {'white': n, 'black': n}
+def initial_board_one_column():
+    b = [{'owner':0,'count':0} for _ in range(24)]
+    b[0]  = {'owner':1,'count':15}
+    b[23] = {'owner':-1,'count':15}
+    return b
+
+class GameState:
+    def __init__(self):
+        self.board = initial_board_one_column()
+        self.bar = {1:0, -1:0}
+        self.borne_off = {1:0, -1:0}
+        self.active = 1  # 1 = Белые ходят первыми
+        self.dice = []  # список значений для использования (например [6,3] или [4,4,4,4] для дубля)
+        self.dice_shown = (0,0)  # последние два кубика (для отображения)
+        self.move_history = []  # список ходов для возможного отката/логирования
+        self.turn_count = 0
+
+    def reset(self):
+        self.__init__()
+
+# --------------------- Логика: вспомогательные функции ---------------------
+def opponent(player):
+    return -player
+
+def is_home_board(idx, player):
+    """Определяет, относится ли индекс idx к домашней доске данного игрока.
+    Для Белых (player=1), home = 18..23 (т.к. направление 0->23).
+    Для Чёрных (player=-1), home = 0..5.
+    """
+    if player == 1:
+        return 18 <= idx <= 23
+    else:
+        return 0 <= idx <= 5
+
+def all_in_home(state: GameState, player: int) -> bool:
+    """Проверка: все шашки игрока находятся в домашней доске (не учитывая вынесенные)."""
+    total_on_board = 0
+    for idx, p in enumerate(state.board):
+        if p['owner'] == player:
+            total_on_board += p['count']
+    # also consider bar pieces: if bar>0 => not all in home
+    if state.bar[player] > 0:
+        return False
+    # home_count
+    home_count = 0
+    for idx, p in enumerate(state.board):
+        if p['owner'] == player and is_home_board(idx, player):
+            home_count += p['count']
+    return (home_count + state.borne_off[player]) + 0 == (home_count + (total_on_board - home_count) + state.borne_off[player]) and home_count == total_on_board
+
+def calc_distance(src:int, dst:int, player:int):
+    """Расстояние в очках, применимое для выбора кубика:
+    Для белых (1): dst - src (должно быть >0).
+    Для чёрных (-1): src - dst (должно быть >0).
+    Возвращает -1 если движение неверного направления.
+    """
+    if player == 1:
+        return dst - src if dst > src else -1
+    else:
+        return src - dst if dst < src else -1
+
+# --------------------- Проверки и валидация ---------------------
+def point_blocked(state: GameState, idx:int, player:int) -> bool:
+    """Возвращает True если точка idx блокирована для входа данного player (то есть на ней >=2 шашек соперника)."""
+    p = state.board[idx]
+    return p['owner'] == opponent(player) and p['count'] > 1
+
+def can_enter_from_bar(state: GameState, player:int, die:int) -> bool:
+    """Проверяет, можно ли ввести одну шашку с бара на поле по значению die."""
+    # для белых с бара вход на пункт index = die-1  (так как белые идут 0->23, вход в точку (die-1) при стандарте)
+    # В классических нардах вход для белых — это точки 24-die (в зависимости от ориентации). Мы используем простую модель:
+    # Пусть вход для белых со бара на index = die-1 (левый край), для чёрных — index = 24 - die.
+    if player == 1:
+        idx = die - 1
+    else:
+        idx = 24 - die
+    if idx < 0 or idx > 23:
+        return False
+    return not point_blocked(state, idx, player)
+
+def possible_moves_from_point(state: GameState, src:int, player:int):
+    """Возвращает список пар (dst, dist) возможных назначений для одной шашки из src по любому значению кубика (не фильтруя наличие конкретного кубика)."""
+    moves = []
+    if state.board[src]['owner'] != player or state.board[src]['count'] == 0:
+        return moves
+    # направление поиска: для простоты генерируем dst = src+1..23 (player=1) или src-1..0 (player=-1)
+    if player == 1:
+        for dst in range(src+1, 24):
+            dist = dst - src
+            if not point_blocked(state, dst, player):
+                moves.append((dst, dist))
+    else:
+        for dst in range(src-1, -1, -1):
+            dist = src - dst
+            if not point_blocked(state, dst, player):
+                moves.append((dst, dist))
+    # также учитывать вынос (bearing off) — dst = 'off' represented by None and dist = computed required value
+    if all_in_home(state, player):
+        # possibility to bear off: if moving beyond last point => allowed per dice rules
+        # For white home is 18..23; a piece on position p can be borne off with die >= (23-p) + 1
+        # We'll handle bearing-off in validate_move_bearing_off separately.
+        moves.append((None, None))
+    return moves
+
+def validate_move_using_die(state: GameState, src:int, die:int, player:int):
+    """
+    Проверка: можно ли сделать ход из src используя точно значение die (для текущего игрока).
+    Возвращает (ok, dst, reason). Если ok=True, dst — индекс пункта назначения или None (вынос).
+    """
+    # Сначала — если у игрока есть шашки на баре, он обязан вводить их до других ходов.
+    if state.bar[player] > 0:
+        # src must be bar (we encode src == 'BAR' as -1)
+        return False, None, "У вас есть шашки на баре — сначала вводите их"
+    # Нормальная цель:
+    if player == 1:
+        dst = src + die
+        if dst > 23:
+            # возможен вынос, только если все в домашней доске
+            if all_in_home(state, player):
+                # check bearing-off rule: allowed if exact die or no higher pieces
+                # exact_exit_distance = 23 - src + 1 -> die >= 24-src? We'll implement standard:
+                # exact needed = 24 - src? Let's compute required = 24 - src -? To simplify: distance to bear off = 24 - src
+                # Better: distance = 24 - src - 1? We'll implement classical: if src + die == 24 -> exact
+                # For white, to bear off from pos p: die == 24 - p ? But indices 0..23, to move beyond 23 with die = 24 - p
+                required = 24 - src
+                if die == required:
+                    return True, None, ""
+                else:
+                    # if die > required, allowed only if there is no checker behind src (with smaller index)
+                    behind = False
+                    for i in range(18, src):  # home is 18..23, behind means lower index in home
+                        if state.board[i]['owner'] == player and state.board[i]['count'] > 0:
+                            behind = True; break
+                    if not behind:
+                        return True, None, ""
+                    else:
+                        return False, None, "Нельзя вынести эту шашку — есть шашки позади неё в доме"
+            else:
+                return False, None, "Вынос невозможен — не все шашки в доме"
+        else:
+            # destination exists on board
+            if point_blocked(state, dst, player):
+                return False, None, "Пункт назначения закрыт (несколько шашек противника)"
+            else:
+                return True, dst, ""
+    else:
+        dst = src - die
+        if dst < 0:
+            # bearing off for black: home 0..5
+            if all_in_home(state, player):
+                required = src + 1
+                if die == required:
+                    return True, None, ""
+                else:
+                    behind = False
+                    for i in range(src+1, 6):  # positions "behind" for black are larger indices inside home
+                        if state.board[i]['owner'] == player and state.board[i]['count'] > 0:
+                            behind = True; break
+                    if not behind:
+                        return True, None, ""
+                    else:
+                        return False, None, "Нельзя вынести эту шашку — есть шашки позади неё в доме"
+            else:
+                return False, None, "Вынос невозможен — не все шашки в доме"
+        else:
+            if point_blocked(state, dst, player):
+                return False, None, "Пункт назначения закрыт (несколько шашек противника)"
+            else:
+                return True, dst, ""
+    # по умолчанию
+    return False, None, "Недопустимый ход"
+
+def validate_enter_from_bar_using_die(state: GameState, die:int, player:int):
+    """Проверить ввод шашки с бара с использованием кубика die."""
+    if player == 1:
+        dst = die - 1
+    else:
+        dst = 24 - die
+    if dst < 0 or dst > 23:
+        return False, None, "Неправильный ввод с бара"
+    if point_blocked(state, dst, player):
+        return False, None, "Пункт входа с бара закрыт"
+    return True, dst, ""
+
+# --------------------- Применение хода ---------------------
+def apply_move(state: GameState, src, dst, player:int):
+    """
+    Применяет ход: взять одну шашку с src (src может быть 'BAR' represented by -1), положить в dst (None => borne_off).
+    Возвращает dict с информацией о побитом противнике (если был) для истории.
+    """
+    info = {'hit':False, 'hit_player':None, 'prev_state': None}
+    # Сохраним предыдуще состояние (глубокая копия) для истории/отката
+    info['prev_state'] = copy.deepcopy(state)
+    # Снять шашку
+    if src == -1:  # BAR
+        if state.bar[player] <= 0:
+            raise ValueError("Попытка снять шашку с пустого бара")
+        state.bar[player] -= 1
+    else:
+        cell = state.board[src]
+        if cell['owner'] != player or cell['count'] <= 0:
+            raise ValueError("Некорректная попытка снять шашку из пункта")
+        if cell['count'] > 1:
+            cell['count'] -= 1
+        else:
+            cell['count'] = 0
+            cell['owner'] = 0
+    # Положить шашку
+    if dst is None:
+        # bearing off
+        state.borne_off[player] += 1
+    else:
+        cell = state.board[dst]
+        if cell['owner'] == opponent(player) and cell['count'] == 1:
+            # hit
+            info['hit'] = True
+            info['hit_player'] = opponent(player)
+            # remove opponent checker to bar
+            state.bar[opponent(player)] += 1
+            # replace with mover
+            cell['owner'] = player
+            cell['count'] = 1
+        elif cell['owner'] == opponent(player) and cell['count'] > 1:
+            # cannot happen since validation already checked
+            raise ValueError("Попытка положить на закрытое поле")
+        elif cell['owner'] == player or cell['owner'] == 0:
+            if cell['count'] == 0:
+                cell['owner'] = player
+                cell['count'] = 1
+            else:
+                cell['count'] += 1
+    # записываем историю
+    state.move_history.append(info)
+    return info
+
+def use_die(state: GameState, die:int):
+    """Удаляет одно использование die из списка state.dice (первые совпадающие)."""
+    for i, v in enumerate(state.dice):
+        if v == die:
+            del state.dice[i]
+            return True
+    return False
+
+# --------------------- Проверка наличия ходов ---------------------
+def any_legal_move(state: GameState, player:int) -> bool:
+    """Проверяет, есть ли хотя бы один законный ход для player с текущим набором state.dice."""
+    # если у игрока шашки на баре — надо пробовать вводы
+    dice = state.dice.copy()
+    if not dice:
+        return False
+    # Переберём все возможные src (включая BAR)
+    if state.bar[player] > 0:
+        # для каждого die проверить вход
+        for d in set(dice):
+            ok, dst, reason = validate_enter_from_bar_using_die(state, d, player)
+            if ok:
+                return True
+        return False
+    # иначе — обычные точки
+    for src_idx, cell in enumerate(state.board):
+        if cell['owner'] != player or cell['count'] == 0:
+            continue
+        # для каждого die проверить применение
+        for d in set(dice):
+            ok, dst, reason = validate_move_using_die(state, src_idx, d, player)
+            if ok:
+                return True
+    return False
+
+# --------------------- Оценочная функция ---------------------
+def evaluate_state_simple(state: GameState, player:int) -> float:
+    """Простейшая оценочная функция для позиции: сумма позиций шашек (вес * count), плюс бонусы за вынесенные."""
+    score = 0.0
+    # assign weight to points: ближе к bearing off — выше вес
+    weights = [i+1 for i in range(24)]
+    for idx, cell in enumerate(state.board):
+        if cell['owner'] == player:
+            score += weights[idx] * cell['count']
+        elif cell['owner'] == opponent(player):
+            score -= weights[23-idx] * cell['count']
+    score += 1000 * state.borne_off[player]
+    score -= 1000 * state.borne_off[opponent(player)]
+    return score
+
+# --------------------- Проверка конца игры ---------------------
+def check_end_game(state: GameState):
+    """Проверка: кто вынес все шашки (borne_off==15). Возвращает winner player (1 or -1) или None."""
+    if state.borne_off[1] >= 15:
+        return 1
+    if state.borne_off[-1] >= 15:
+        return -1
+    return None
+
+# --------------------- Интерфейс (tkinter) ---------------------
+class NardyGUI:
+    def __init__(self, root):
+        self.root = root
+        root.title(f"НАРДЫ — курсовая (логика) — {VERSION}")
+        self.game = GameState()
+        self.users = load_users()
+        self.current_user = None
+
+        # верхняя панель: логин
+        top = tk.Frame(root)
+        top.pack(fill='x', padx=6, pady=4)
+        tk.Label(top, text="Логин:").pack(side='left')
+        self.login_entry = tk.Entry(top, width=12)
+        self.login_entry.pack(side='left', padx=4)
+        tk.Label(top, text="Пароль:").pack(side='left')
+        self.pass_entry = tk.Entry(top, width=12, show='*')
+        self.pass_entry.pack(side='left', padx=4)
+        tk.Button(top, text="Войти/Зарегистрироваться", command=self.reg_or_login).pack(side='left', padx=6)
+
+        # кнопки управления
+        ctrl = tk.Frame(root)
+        ctrl.pack(fill='x', padx=6, pady=4)
+        tk.Button(ctrl, text="Бросить кубики", command=self.roll_dice).pack(side='left', padx=4)
+        tk.Button(ctrl, text="Пропустить ход (если нет ходов)", command=self.skip_if_no_moves).pack(side='left', padx=4)
+        tk.Button(ctrl, text="Сохранить", command=self.save_game).pack(side='right', padx=4)
+        tk.Button(ctrl, text="Загрузить", command=self.load_game).pack(side='right', padx=4)
+        tk.Button(ctrl, text="Сбросить", command=self.reset_game).pack(side='right', padx=4)
+
+        # Canvas — рисуем доску на нём
+        self.canvas = tk.Canvas(root, width=920, height=420, bg="#b97a57")
+        self.canvas.pack(padx=10, pady=6)
+        self.canvas.bind("<Button-1>", self.on_canvas_click)
+
+        # статус-бар
+        self.status_var = tk.StringVar()
+        self.status_label = tk.Label(root, textvariable=self.status_var, bd=1, relief='sunken', anchor='w', font=("Arial", 10))
+        self.status_label.pack(fill='x')
+
+        # вспомогательные структуры отрисовки
+        self.point_positions = {}  # idx -> (cx, cy_top, cy_bottom)
+        self.piece_items = {}  # (idx, k) -> canvas id
+        self.selected_src = None
+
+        # нарисовать поле и шашки
+        self.draw_board()
+        self.draw_pieces()
+        self.update_status("Готово. Войдите или зарегистрируйтесь.")
+
+    # ---- Authentication ----------
+    def reg_or_login(self):
+        login = self.login_entry.get().strip()
+        pwd = self.pass_entry.get().strip()
+        if not login or not pwd:
+            messagebox.showwarning("Ошибка", "Введите логин и пароль")
+            return
+        if login in self.users:
+            if decrypt(self.users[login]) == pwd:
+                self.current_user = login
+                messagebox.showinfo("ОК", f"Вход выполнен: {login}")
+            else:
+                messagebox.showerror("Ошибка", "Неверный пароль")
+                return
+        else:
+            save_user(login, pwd)
+            self.users = load_users()
+            self.current_user = login
+            messagebox.showinfo("ОК", f"Пользователь {login} зарегистрирован и вошёл")
+        self.update_status(f"Залогинен: {self.current_user} | Сейчас ходят: {'Белые' if self.game.active==1 else 'Чёрные'}")
+
+    # ---- Drawing board ----------
+    def draw_board(self):
+        c = self.canvas
+        c.delete("all")
+        margin = 20
+        board_w = 880
+        board_h = 360
+        x0 = margin; y0 = margin
+        c.create_rectangle(x0, y0, x0+board_w, y0+board_h, fill="#e1cfa7", outline="#000", width=2)
+        # бар
+        bar_x0 = x0 + board_w/2 - 30; bar_x1 = x0 + board_w/2 + 30
+        c.create_rectangle(bar_x0, y0, bar_x1, y0+board_h, fill="#7a4c2b", outline="#000", width=2)
+        # triangles: 12 top (12..23 left->right), 12 bottom (11..0 left->right)
+        tri_w = (board_w - 140) / 12.0
+        top_y0 = y0 + 10; top_y1 = y0 + board_h/2 - 10
+        bot_y0 = y0 + board_h/2 + 10; bot_y1 = y0 + board_h - 10
+        self.point_positions = {}
+        # top row
+        for i in range(12):
+            idx = 12 + i
+            px = x0 + 10 + i*tri_w
+            points = [px, top_y0, px+tri_w, top_y0, px+tri_w/2, top_y1]
+            color = "#fff" if i%2==0 else "#222"
+            c.create_polygon(points, fill=color, outline="black")
+            cx = px+tri_w/2
+            cy_top = top_y1 - 12
+            cy_bottom = top_y1 - 12  # stacking upwards
+            self.point_positions[idx] = (cx, cy_top, 'up')
+            # index label
+            c.create_text(cx, top_y0+6, text=str(idx), font=("Arial",9))
+        # bottom row
+        for i in range(12):
+            idx = 11 - i
+            px = x0 + 10 + i*tri_w
+            points = [px, bot_y1, px+tri_w, bot_y1, px+tri_w/2, bot_y0]
+            color = "#fff" if i%2==0 else "#222"
+            c.create_polygon(points, fill=color, outline="black")
+            cx = px+tri_w/2
+            cy_top = bot_y0 + 12
+            self.point_positions[idx] = (cx, cy_top, 'down')
+            c.create_text(cx, bot_y1-6, text=str(idx), font=("Arial",9))
+        # bar label
+        c.create_text((bar_x0+bar_x1)/2, y0+board_h/2, text="BAR", fill="white", font=("Arial",12,"bold"))
+
+    def draw_pieces(self):
+        # удаляем старые
+        for item in self.canvas.find_withtag("piece"):
+            self.canvas.delete(item)
+        self.piece_items.clear()
+        # рисуем стеки
+        for idx in range(24):
+            cell = self.game.board[idx]
+            if cell['count'] <= 0:
+                continue
+            cx, cy, direction = self.point_positions[idx]
+            # stack upward for top points (direction 'up'), downward for bottom
+            if direction == 'up':
+                for k in range(cell['count']):
+                    y = cy - k*18
+                    color = "#fff" if cell['owner'] == 1 else "#111"
+                    item = self.canvas.create_oval(cx-16, y-16, cx+16, y+16, fill=color, outline="#000", tags=("piece", f"p{idx}"))
+                    self.canvas.tag_bind(item, "<Button-1>", lambda e, ii=idx: self.on_point_click(ii))
+                    self.piece_items[(idx,k)] = item
+            else:
+                for k in range(cell['count']):
+                    y = cy + k*18
+                    color = "#fff" if cell['owner'] == 1 else "#111"
+                    item = self.canvas.create_oval(cx-16, y-16, cx+16, y+16, fill=color, outline="#000", tags=("piece", f"p{idx}"))
+                    self.canvas.tag_bind(item, "<Button-1>", lambda e, ii=idx: self.on_point_click(ii))
+                    self.piece_items[(idx,k)] = item
+        # draw bar counts
+        # we'll place bar indicators near center
+        bar_x = 20 + 880/2
+        # white bar count
+        self.canvas.create_text(bar_x-40, 200, text=f"БАР Белые: {self.game.bar[1]}", fill="#fff", font=("Arial",10,"bold"))
+        self.canvas.create_text(bar_x+40, 200, text=f"БАР Чёрные: {self.game.bar[-1]}", fill="#fff", font=("Arial",10,"bold"))
+        # borne off
+        self.canvas.create_text(60, 10, text=f"Вынесено Белые: {self.game.borne_off[1]}", anchor='nw')
+        self.canvas.create_text(220, 10, text=f"Вынесено Чёрные: {self.game.borne_off[-1]}", anchor='nw')
+
+        # highlight selected
+        if self.selected_src is not None:
+            cx, cy, dir = self.point_positions[self.selected_src]
+            self.canvas.create_rectangle(cx-20, cy-20, cx+20, cy+20, outline="green", width=3, tags=("sel",))
+
+    # ---- Canvas click handling ----
+    def on_canvas_click(self, event):
+        # определить ближайший пункт по x
+        x = event.x; y = event.y
+        best_idx = None; bestd = 1e9
+        for idx, (cx, cy, dir) in self.point_positions.items():
+            d = abs(cx - x) + abs(cy - y)
+            if d < bestd:
+                bestd = d; best_idx = idx
+        if best_idx is not None:
+            self.on_point_click(best_idx)
+
+    def on_point_click(self, idx):
+        # если есть шашки на баре для текущего игрока — только вход из бара разрешён
+        player = self.game.active
+        if self.selected_src is None:
+            # старт выбора
+            if self.game.bar[player] > 0:
+                messagebox.showinfo("Ход", "У вас есть шашки на баре — сначала введите их с бара (кнопка Бросить кубики и затем клик по пункту входа).")
+                return
+            cell = self.game.board[idx]
+            if cell['owner'] == player and cell['count'] > 0:
+                self.selected_src = idx
+                self.update_status(f"Выбрана точка {idx}. Выберите пункт назначения (используйте значения кубиков: {self.game.dice}).")
+                self.draw_pieces()
+            else:
+                self.update_status("Выберите свою шашку.")
+        else:
+            # попытка сделать ход selected_src -> idx с использованием одного из кубиков
+            src = self.selected_src
+            used = None
+            reason = ""
+            for d in sorted(set(self.game.dice)):
+                ok, dst, r = validate_move_using_die(self.game, src, d, player)
+                if ok and (dst == idx):
+                    used = d; reason = r; break
+                # also check hit possibility where dst==idx
+            if used is None:
+                # если dst matches via entry
