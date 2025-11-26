@@ -1,0 +1,265 @@
+import tkinter as tk
+from tkinter import messagebox
+import random
+
+class RussianBackgammon:
+    def __init__(self):
+        self.root = tk.Tk()
+        self.root.title("Русские нарды по методичке")
+        self.root.geometry("1000x700")
+        
+        # Игровое состояние
+        self.current_player = 1  # 1 - белые, -1 - черные
+        self.board = [0] * 24
+        self.selected_checker = None
+        self.dice = []
+        self.used_dice = []
+        
+        # Цвета
+        self.colors = {
+            "board": "#DEB887",
+            "light": "#F5F5DC",
+            "dark": "#8B4513",
+            "white": "#FFFFFF",
+            "black": "#000000",
+            "highlight": "#FF0000",
+            "info_bg": "#F0F0F0"
+        }
+        
+        self.create_gui()
+        self.setup_board()
+        self.draw_board()
+        self.roll_dice()
+
+    def create_gui(self):
+        # Информационная панель
+        self.info_frame = tk.Frame(self.root, bg=self.colors["info_bg"], height=50)
+        self.info_frame.pack(fill=tk.X, padx=10, pady=5)
+        self.status_label = tk.Label(self.info_frame, text="", font=("Arial", 12), bg=self.colors["info_bg"])
+        self.status_label.pack(side=tk.LEFT, padx=10)
+        self.player_label = tk.Label(self.info_frame, text="", font=("Arial", 12), bg=self.colors["info_bg"])
+        self.player_label.pack(side=tk.LEFT, padx=10)
+        
+        # Холст для доски
+        self.canvas = tk.Canvas(self.root, width=900, height=500, bg=self.colors["board"])
+        self.canvas.pack(padx=10, pady=10)
+        self.canvas.bind("<Button-1>", self.on_canvas_click)
+        
+        # Панель управления
+        self.control_frame = tk.Frame(self.root, bg=self.colors["info_bg"], height=50)
+        self.control_frame.pack(fill=tk.X, padx=10, pady=5)
+        self.dice_canvas = tk.Canvas(self.control_frame, width=150, height=50, bg=self.colors["info_bg"])
+        self.dice_canvas.pack(side=tk.LEFT, padx=10)
+        self.roll_btn = tk.Button(self.control_frame, text="Бросить кости", command=self.roll_dice)
+        self.roll_btn.pack(side=tk.LEFT, padx=10)
+        self.new_game_btn = tk.Button(self.control_frame, text="Новая игра", command=self.new_game)
+        self.new_game_btn.pack(side=tk.LEFT, padx=10)
+
+    def setup_board(self):
+        """Начальная расстановка шашек по твоему описанию"""
+        self.board = [0]*24
+        # Белые сверху справа, в позиции 11 (верхний ряд, правая позиция)
+        self.board[11] = 15
+        # Черные снизу слева, в позиции 0 (нижний ряд, левая позиция)
+        self.board[0] = -15
+        self.current_player = 1
+        self.selected_checker = None
+        self.dice = []
+        self.used_dice = []
+
+    def draw_board(self):
+        self.canvas.delete("all")
+        # Верхние треугольники
+        for i in range(12):
+            x1 = 50 + i*60
+            x2 = x1 + 30
+            x3 = x1 + 60
+            y_top = 50
+            y_bottom = 250
+            color = self.colors["light"] if i%2==0 else self.colors["dark"]
+            self.canvas.create_polygon(x1,y_top,x2,y_bottom,x3,y_top,fill=color,outline="black")
+        # Нижние треугольники
+        for i in range(12):
+            x1 = 50 + i*60
+            x2 = x1 + 30
+            x3 = x1 + 60
+            y_top = 300
+            y_bottom = 500
+            color = self.colors["light"] if i%2==0 else self.colors["dark"]
+            self.canvas.create_polygon(x1,y_bottom,x2,y_top,x3,y_bottom,fill=color,outline="black")
+        # Вертикальная разделительная полоса
+        self.canvas.create_rectangle(410,50,490,500,fill="#8B4513",outline="#8B4513")
+        # Рисуем шашки
+        self.draw_checkers()
+        # Обновляем статус
+        self.update_status()
+
+    def draw_checkers(self):
+        for i in range(24):
+            count = abs(self.board[i])
+            if count == 0:
+                continue
+            player = 1 if self.board[i]>0 else -1
+            if i<12:
+                x = 65 + i*60
+                base_y = 70
+                direction = 1
+            else:
+                x = 65 + (23-i)*60
+                base_y = 480
+                direction = -1
+            for j in range(min(count,5)):
+                y = base_y + j*25*direction
+                color = self.colors["white"] if player==1 else self.colors["black"]
+                outline = self.colors["black"] if player==1 else self.colors["white"]
+                self.canvas.create_oval(x-20,y-20,x+20,y+20,fill=color,outline=outline,width=2)
+            if count>5:
+                y = base_y + 5*25*direction
+                self.canvas.create_text(x,y,text=str(count),fill="red" if player==1 else "yellow",font=("Arial",12,"bold"))
+        # Подсветка выбранной шашки
+        if self.selected_checker is not None:
+            self.highlight_checker(self.selected_checker)
+
+    def highlight_checker(self,pos):
+        if pos<12:
+            x = 65 + pos*60
+            y = 70
+        else:
+            x = 65 + (23-pos)*60
+            y = 480
+        self.canvas.create_oval(x-25,y-25,x+25,y+25,outline=self.colors["highlight"],width=3)
+
+    def roll_dice(self):
+        self.dice = [random.randint(1,6),random.randint(1,6)]
+        if self.dice[0]==self.dice[1]:
+            self.dice = self.dice*2
+        self.used_dice=[]
+        self.draw_dice()
+        self.update_status()
+
+    def draw_dice(self):
+        self.dice_canvas.delete("all")
+        for i,val in enumerate(self.dice):
+            x = 30+i*60
+            y = 25
+            self.dice_canvas.create_rectangle(x-20,y-20,x+20,y+20,fill="#FFFFFF",outline="black",width=2)
+            dots = self.get_dots(val)
+            for dx,dy in dots:
+                self.dice_canvas.create_oval(x+dx-4,y+dy-4,x+dx+4,y+dy+4,fill="black")
+
+    def get_dots(self,val):
+        mapping = {
+            1:[(0,0)],
+            2:[(-10,-10),(10,10)],
+            3:[(-10,-10),(0,0),(10,10)],
+            4:[(-10,-10),(10,-10),(-10,10),(10,10)],
+            5:[(-10,-10),(10,-10),(0,0),(-10,10),(10,10)],
+            6:[(-10,-10),(10,-10),(-10,0),(10,0),(-10,10),(10,10)]
+        }
+        return mapping.get(val,[])
+
+    def on_canvas_click(self,event):
+        pos = self.get_position_from_click(event.x,event.y)
+        if pos is None:
+            return
+        self.handle_checker_click(pos)
+
+    def get_position_from_click(self,x,y):
+        if 50<=y<=250:
+            for i in range(12):
+                if 50+i*60 <= x <= 110+i*60:
+                    return i
+        elif 300<=y<=500:
+            for i in range(12):
+                if 50+i*60 <= x <= 110+i*60:
+                    return 23-i
+        return None
+
+    def handle_checker_click(self,pos):
+        if self.selected_checker is None:
+            if self.board[pos]*self.current_player>0:
+                self.selected_checker=pos
+                self.status_label.config(text="Выберите куда ходить")
+                self.draw_board()
+        else:
+            if self.is_valid_move(self.selected_checker,pos):
+                self.make_move(self.selected_checker,pos)
+                self.selected_checker=None
+                self.draw_board()
+                self.check_end()
+            else:
+                self.selected_checker=None
+                self.status_label.config(text="Неверный ход")
+                self.draw_board()
+
+    def is_valid_move(self,from_pos,to_pos):
+        if self.board[from_pos]*self.current_player<=0:
+            return False
+        # Расстояние
+        if self.current_player==1:
+            distance = from_pos - to_pos
+        else:
+            distance = to_pos - from_pos
+        if distance not in self.dice:
+            return False
+        if self.board[to_pos]*self.current_player<-1:
+            return False
+        return True
+
+    def make_move(self,from_pos,to_pos):
+        if self.current_player==1:
+            distance = from_pos - to_pos
+        else:
+            distance = to_pos - from_pos
+        if distance in self.dice:
+            self.dice.remove(distance)
+            self.used_dice.append(distance)
+        # Перемещаем шашку
+        move_dir = 1 if self.board[from_pos]>0 else -1
+        self.board[from_pos]-=move_dir
+        if self.board[to_pos]*self.current_player==-1:
+            # Сбиваем шашку
+            if self.current_player==1:
+                self.board[0]-=1
+            else:
+                self.board[23]+=1
+            self.board[to_pos]+=move_dir
+        else:
+            self.board[to_pos]+=move_dir
+        if not self.dice:
+            self.current_player*=-1
+            self.roll_dice()
+        self.update_status()
+        self.draw_dice()
+
+    def update_status(self):
+        player_text = "БЕЛЫЕ" if self.current_player==1 else "ЧЕРНЫЕ"
+        self.player_label.config(text=f"ХОД: {player_text}")
+        if not self.dice:
+            self.status_label.config(text="Бросьте кости!")
+        elif self.selected_checker is None:
+            self.status_label.config(text="Выберите шашку")
+        else:
+            self.status_label.config(text="Выберите пункт для хода")
+
+    def check_end(self):
+        white_win = all(self.board[i]>=0 for i in range(24))
+        black_win = all(self.board[i]<=0 for i in range(24))
+        if white_win:
+            messagebox.showinfo("Игра окончена","Белые выиграли!")
+            self.new_game()
+        elif black_win:
+            messagebox.showinfo("Игра окончена","Черные выиграли!")
+            self.new_game()
+
+    def new_game(self):
+        self.setup_board()
+        self.draw_board()
+        self.roll_dice()
+
+    def run(self):
+        self.root.mainloop()
+
+if __name__=="__main__":
+    game = RussianBackgammon()
+    game.run()
