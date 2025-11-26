@@ -1,0 +1,504 @@
+# nardy_course.py
+# КУРСОВАЯ: "Русские короткие нарды" — двое игроков за одним компьютером
+# Соответствует требованиям методички (авторизация, хранение в файле, шифрование, tkinter, алгоритмы...)
+
+import tkinter as tk
+from tkinter import messagebox
+import random
+import os
+
+# --------------- Константы и параметры визуала ---------------
+CANVAS_W, CANVAS_H = 960, 520
+POINT_HEIGHT = 220
+BOARD_MARGIN = 30
+CHECKER_RADIUS = 18
+STACK_SPACING = 6
+NUM_POINTS = 24
+CHECKERS_PER_PLAYER = 15
+WHITE = 'white'
+BLACK = 'black'
+
+USERS_FILE = "users.txt"
+ENC_SHIFT = 10  # простое шифрование методом сдвига (требование методички)
+
+# --------------- Утилиты шифрования (обязательные) ---------------
+def encrypt(text, shift=ENC_SHIFT):
+    return ''.join(chr((ord(c) + shift)) for c in text)
+
+def decrypt(text, shift=ENC_SHIFT):
+    return ''.join(chr((ord(c) - shift)) for c in text)
+
+# --------------- Игровая логика ---------------
+class GameState:
+    def __init__(self):
+        # points indexed 1..24, each stores {'white': n, 'black': m}
+        self.points = [{'white':0, 'black':0} for _ in range(NUM_POINTS+1)]
+        # начальная расстановка: по требованию — все белые в 24, все черные в 1
+        self.points[24]['white'] = CHECKERS_PER_PLAYER
+        self.points[1]['black'] = CHECKERS_PER_PLAYER
+
+        self.borne = {WHITE:0, BLACK:0}  # выведенные шашки
+        self.current_player = WHITE  # белые ходят первыми
+        self.dice = ()  # кости
+        self.dice_used = []  # булевы флаги
+        self.selected = None  # выбранная точка
+        self.valid_moves = []  # список (dice_index, target_idx)
+        self.move_history = []  # история ходов (для отчёта)
+        self.turns_without_bearing = {WHITE:0, BLACK:0}  # для доп правил если нужно
+
+    # бросок костей (обяз.)
+    def roll_dice(self):
+        a = random.randint(1,6)
+        b = random.randint(1,6)
+        if a == b:
+            self.dice = (a,a,a,a)
+            self.dice_used = [False, False, False, False]
+        else:
+            self.dice = (a,b)
+            self.dice_used = [False, False]
+        self.selected = None
+        self.valid_moves = []
+
+    def all_dice_used(self):
+        return all(self.dice_used) if self.dice_used else True
+
+    def direction(self):
+        # все идут от 1 -> 24
+        return 1
+
+    def point_owner(self, idx):
+        p = self.points[idx]
+        if p['white'] > 0 and p['black'] == 0:
+            return WHITE
+        if p['black'] > 0 and p['white'] == 0:
+            return BLACK
+        return None
+
+    def can_move_from(self, idx):
+        if idx < 1 or idx > NUM_POINTS: return False
+        return self.points[idx][self.current_player] > 0
+
+    def is_blocked_for(self, target_idx, player):
+        # по заданию: нельзя заходить на пункт, где >=1 фишки противника
+        if target_idx < 1 or target_idx > NUM_POINTS:
+            return False
+        opp = BLACK if player==WHITE else WHITE
+        return self.points[target_idx][opp] >= 1
+
+    def all_in_home(self, player):
+        # Для направления 1->24, домашний сектор — 19..24
+        home = range(19,25)
+        total_on_board = sum(self.points[i][player] for i in range(1, NUM_POINTS+1))
+        borne = self.borne[player]
+        # check all on board are in home
+        for i in range(1, NUM_POINTS+1):
+            if i not in home and self.points[i][player] > 0:
+                return False
+        return (total_on_board + borne) == CHECKERS_PER_PLAYER
+
+    def possible_targets_from(self, idx):
+        """Возвращает список (dice_index, target_idx). target_idx == 0 означает вынос (bearing off)."""
+        res = []
+        if not self.can_move_from(idx): return res
+        dice_vals = []
+        for i, v in enumerate(self.dice):
+            if not self.dice_used[i]:
+                dice_vals.append((i, v))
+        dirn = self.direction()
+        for di, val in dice_vals:
+            target = idx + dirn * val
+            if target > NUM_POINTS:
+                # попытка вынести
+                if self.all_in_home(self.current_player):
+                    res.append((di, 0))
+            else:
+                if not self.is_blocked_for(target, self.current_player):
+                    res.append((di, target))
+        return res
+
+    def apply_move(self, from_idx, target_idx, dice_index):
+        player = self.current_player
+        if target_idx == 0:
+            # bearing off
+            if self.points[from_idx][player] <= 0:
+                return False
+            self.points[from_idx][player] -= 1
+            self.borne[player] += 1
+            self.move_history.append((player, from_idx, 'OFF'))
+            # increment turns_without_bearing for opponent maybe reset below
+        else:
+            # обычный переход (без биться)
+            self.points[from_idx][player] -= 1
+            self.points[target_idx][player] += 1
+            self.move_history.append((player, from_idx, target_idx))
+        # пометка кости использованной
+        if 0 <= dice_index < len(self.dice_used):
+            self.dice_used[dice_index] = True
+        # сброс выделения
+        self.selected = None
+        self.valid_moves = []
+        return True
+
+    def check_game_over(self):
+        if self.borne[WHITE] >= CHECKERS_PER_PLAYER:
+            return WHITE
+        if self.borne[BLACK] >= CHECKERS_PER_PLAYER:
+            return BLACK
+        return None
+
+    # Оценочная функция (обязательная по методичке) — возвращает число: меньше лучше для текущего игрока
+    def evaluate_position(self, player):
+        # простая эвристика: сумма расстояний всех шашек до выхода (чем меньше — лучше)
+        total = 0
+        for i in range(1, NUM_POINTS+1):
+            cnt = self.points[i][player]
+            # distance to bearing off: (NUM_POINTS - i + 1) assuming bearing beyond NUM_POINTS
+            dist = (NUM_POINTS - i + 1) if player == WHITE else (i)  # but both move 1->24 here; keep symmetric
+            total += cnt * dist
+        # subtract borne (closer is better)
+        total -= self.borne[player] * 100
+        return total
+
+# --------------- GUI ---------------
+class NardyApp:
+    def __init__(self, root):
+        self.root = root
+        root.title("Русские короткие нарды — курсовая")
+        self.state = GameState()
+        # Frame layout
+        self.left_frame = tk.Frame(root)
+        self.left_frame.pack(side=tk.LEFT, padx=5, pady=5)
+        self.canvas = tk.Canvas(self.left_frame, width=CANVAS_W, height=CANVAS_H, bg='#f5deb3')
+        self.canvas.pack()
+        self.right_frame = tk.Frame(root)
+        self.right_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=10, pady=10)
+        # Controls
+        self.roll_btn = tk.Button(self.right_frame, text="Бросить кости", command=self.roll_dice, width=18)
+        self.roll_btn.pack(pady=6)
+        self.dice_lbl = tk.Label(self.right_frame, text="Кости: -")
+        self.dice_lbl.pack(pady=6)
+        self.turn_lbl = tk.Label(self.right_frame, text="Ход: белые")
+        self.turn_lbl.pack(pady=6)
+        self.info_lbl = tk.Label(self.right_frame, text="Авторизуйтесь и начните игру", wraplength=180, justify='left')
+        self.info_lbl.pack(pady=6)
+        self.end_btn = tk.Button(self.right_frame, text="Завершить ход", command=self.end_turn, width=18)
+        self.end_btn.pack(pady=6)
+        self.restart_btn = tk.Button(self.right_frame, text="Новая игра", command=self.new_game, width=18)
+        self.restart_btn.pack(pady=6)
+
+        # auth frame will overlay
+        self.auth_frame = None
+        self.current_user = None
+
+        # Bindings
+        self.canvas.bind("<Button-1>", self.on_click)
+
+        # prepare layout geometry
+        self.point_layout_cache = None
+
+        # show auth form on start
+        self.create_auth_form(register=False)
+        self.redraw()
+
+    # ---------------- Auth (как у примера друга) ----------------
+    def auth_user(self, username, password, register=False):
+        try:
+            if register:
+                # check exists
+                if os.path.exists(USERS_FILE):
+                    with open(USERS_FILE, "r", encoding="utf-8") as f:
+                        for line in f:
+                            parts = line.rstrip("\n").split(":")
+                            if len(parts) >= 1 and decrypt(parts[0]) == username:
+                                return False, "Пользователь уже существует"
+                with open(USERS_FILE, "a", encoding="utf-8") as f:
+                    f.write(f"{encrypt(username)}:{encrypt(password)}\n")
+                return True, "Регистрация успешна"
+            else:
+                if not os.path.exists(USERS_FILE):
+                    return False, "Нет зарегистрированных пользователей"
+                with open(USERS_FILE, "r", encoding="utf-8") as f:
+                    for line in f:
+                        parts = line.strip().split(":")
+                        if len(parts) == 2 and decrypt(parts[0]) == username and decrypt(parts[1]) == password:
+                            return True, "Вход успешен"
+                return False, "Неверный логин или пароль"
+        except Exception as e:
+            return False, "Ошибка файла"
+
+    def create_auth_form(self, register=False):
+        if self.auth_frame:
+            self.auth_frame.destroy()
+        self.auth_frame = tk.Frame(self.right_frame if False else self.left_frame, bg="white")
+        # place it centered over canvas area
+        self.auth_frame.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
+        title = "Регистрация" if register else "Вход"
+        tk.Label(self.auth_frame, text=title, font=("Arial", 14, "bold")).pack(pady=8)
+        tk.Label(self.auth_frame, text="Логин:").pack(anchor='w', padx=6)
+        login_entry = tk.Entry(self.auth_frame, width=25)
+        login_entry.pack(padx=6, pady=(0,6))
+        tk.Label(self.auth_frame, text="Пароль:").pack(anchor='w', padx=6)
+        pass_entry = tk.Entry(self.auth_frame, width=25, show="*")
+        pass_entry.pack(padx=6, pady=(0,6))
+        confirm_entry = None
+        if register:
+            tk.Label(self.auth_frame, text="Подтвердите пароль:").pack(anchor='w', padx=6)
+            confirm_entry = tk.Entry(self.auth_frame, width=25, show="*")
+            confirm_entry.pack(padx=6, pady=(0,6))
+        status = tk.Label(self.auth_frame, text="", fg='red')
+        status.pack(pady=4)
+
+        def submit():
+            u = login_entry.get().strip()
+            p = pass_entry.get().strip()
+            if not u or not p:
+                status.config(text="Заполните все поля")
+                return
+            if register:
+                if confirm_entry.get().strip() != p:
+                    status.config(text="Пароли не совпадают")
+                    return
+            ok, msg = self.auth_user(u, p, register)
+            status.config(text=msg, fg='green' if ok else 'red')
+            if ok:
+                self.current_user = u
+                self.auth_frame.destroy()
+                self.auth_frame = None
+                self.canvas.pack()
+                self.new_game()
+        def switch():
+            self.auth_frame.destroy()
+            self.create_auth_form(not register)
+        btn_frame = tk.Frame(self.auth_frame)
+        btn_frame.pack(pady=6)
+        tk.Button(btn_frame, text=title, command=submit, width=12).pack(side=tk.LEFT, padx=4)
+        tk.Button(btn_frame, text="Регистрация" if not register else "Назад", command=switch, width=12).pack(side=tk.LEFT, padx=4)
+        # Enter binding
+        self.auth_frame.bind_all('<Return>', lambda e: submit())
+
+    # ---------------- Board geometry ----------------
+    def point_layout(self):
+        # cache layout
+        if self.point_layout_cache:
+            return self.point_layout_cache
+        left = BOARD_MARGIN
+        right = CANVAS_W - BOARD_MARGIN
+        layout = [None]*(NUM_POINTS+1)
+        # top row points 13..24 left->right
+        top_y1 = BOARD_MARGIN
+        top_y2 = BOARD_MARGIN + POINT_HEIGHT
+        total_w = right - left
+        pt_w = total_w / 12.0
+        for i in range(13,25):
+            x1 = left + (i-13)*pt_w + 4
+            x2 = x1 + pt_w - 8
+            layout[i] = (x1, top_y1, x2, top_y2)
+        # bottom row 12..1 left->right
+        bottom_y1 = CANVAS_H - BOARD_MARGIN - POINT_HEIGHT
+        bottom_y2 = CANVAS_H - BOARD_MARGIN
+        for pos, idx in enumerate(range(12,0,-1)):
+            x1 = left + pos*pt_w + 4
+            x2 = x1 + pt_w - 8
+            layout[idx] = (x1, bottom_y1, x2, bottom_y2)
+        self.point_layout_cache = layout
+        return layout
+
+    # ---------------- Draw ----------------
+    def redraw(self):
+        self.canvas.delete("all")
+        layout = self.point_layout()
+        # outer board rect
+        self.canvas.create_rectangle(BOARD_MARGIN-6, BOARD_MARGIN-6, CANVAS_W-BOARD_MARGIN+6, CANVAS_H-BOARD_MARGIN+6, outline='black', width=2, fill='#dca')
+        # draw triangles
+        for i in range(1, NUM_POINTS+1):
+            x1,y1,x2,y2 = layout[i]
+            midx = (x1 + x2)/2
+            if i >= 13:
+                # top row — pointing down
+                self.canvas.create_polygon(x1, y1, x2, y1, midx, y1 + (y2-y1)/2, fill='#e4d0b8', outline='black')
+            else:
+                # bottom row — pointing up
+                self.canvas.create_polygon(x1, y2, x2, y2, (x1+x2)/2, y2 - (y2-y1)/2, fill='#c9a97d', outline='black')
+            # index label
+            self.canvas.create_text((x1+x2)/2, y2+10 if i<13 else y1-10, text=str(i), font=("Arial", 9))
+            # draw stack
+            self.draw_stack(i, (x1,y1,x2,y2))
+        # highlight selection and targets
+        if self.state.selected:
+            r = layout[self.state.selected]
+            if r:
+                x1,y1,x2,y2 = r
+                self.canvas.create_rectangle(x1+2, y1+2, x2-2, y2-2, outline='cyan', width=3)
+        for (di, targ) in self.state.valid_moves:
+            if targ == 0:
+                # show at right area a small marker
+                self.canvas.create_text(CANVAS_W-100, CANVAS_H/2 + 60, text="Вынос возможен", fill='green')
+            else:
+                r = layout[targ]
+                if r:
+                    x1,y1,x2,y2 = r
+                    self.canvas.create_rectangle(x1+6, y1+6, x2-6, y2-6, outline='green', width=3)
+        # labels
+        self.turn_lbl.config(text=f"Ход: {'белые' if self.state.current_player==WHITE else 'чёрные'}")
+        if self.state.dice:
+            self.update_dice_label()
+        else:
+            self.dice_lbl.config(text="Кости: -")
+        self.canvas.create_text(CANVAS_W-80, CANVAS_H/2-40, text=f"Выведено\nБелых: {self.state.borne[WHITE]}\nЧёрных: {self.state.borne[BLACK]}", anchor='e', font=("Arial",10))
+
+    def draw_stack(self, idx, rect):
+        x1,y1,x2,y2 = rect
+        center_x = (x1 + x2)/2
+        top_row = idx >= 13
+        w = self.state.points[idx]['white']
+        b = self.state.points[idx]['black']
+        # draw whites and blacks with stacking direction depending row
+        if top_row:
+            y_top = y1 + 12
+            for i in range(w):
+                cy = y_top + i*(2*CHECKER_RADIUS - STACK_SPACING)
+                self.canvas.create_oval(center_x - CHECKER_RADIUS, cy - CHECKER_RADIUS, center_x + CHECKER_RADIUS, cy + CHECKER_RADIUS, fill='white', outline='black')
+            base = y_top + max(w,0)*(2*CHECKER_RADIUS - STACK_SPACING) + 4
+            for i in range(b):
+                cy = base + i*(2*CHECKER_RADIUS - STACK_SPACING)
+                self.canvas.create_oval(center_x - CHECKER_RADIUS, cy - CHECKER_RADIUS, center_x + CHECKER_RADIUS, cy + CHECKER_RADIUS, fill='black', outline='white')
+        else:
+            y_base = y2 - 12
+            for i in range(w):
+                cy = y_base - i*(2*CHECKER_RADIUS - STACK_SPACING)
+                self.canvas.create_oval(center_x - CHECKER_RADIUS, cy - CHECKER_RADIUS, center_x + CHECKER_RADIUS, cy + CHECKER_RADIUS, fill='white', outline='black')
+            base = y_base - max(w,0)*(2*CHECKER_RADIUS - STACK_SPACING) - 4
+            for i in range(b):
+                cy = base - i*(2*CHECKER_RADIUS - STACK_SPACING)
+                self.canvas.create_oval(center_x - CHECKER_RADIUS, cy - CHECKER_RADIUS, center_x + CHECKER_RADIUS, cy + CHECKER_RADIUS, fill='black', outline='white')
+
+    def coords_to_point(self, x, y):
+        layout = self.point_layout()
+        for i in range(1, NUM_POINTS+1):
+            rect = layout[i]
+            x1,y1,x2,y2 = rect
+            if x1 <= x <= x2 and y1 <= y <= y2:
+                return i
+        return None
+
+    # ---------------- Game controls ----------------
+    def roll_dice(self):
+        if not self.current_user:
+            messagebox.showwarning("Авторизация", "Сначала войдите")
+            return
+        if self.state.dice and not self.state.all_dice_used():
+            messagebox.showinfo("Инфо", "Вы ещё не использовали все кости")
+            return
+        self.state.roll_dice()
+        self.update_dice_label()
+        self.info_lbl.config(text="Выберите шашку для хода")
+        self.redraw()
+
+    def update_dice_label(self):
+        d = self.state.dice
+        if not d:
+            self.dice_lbl.config(text="Кости: -")
+            return
+        if len(d) == 4:
+            s = " ".join(str(v) for v in d)
+            used = "".join('*' if u else '' for u in self.state.dice_used)
+            self.dice_lbl.config(text=f"Кости: {s}")
+        else:
+            s = f"{d[0]} {d[1]}"
+            self.dice_lbl.config(text="Кости: " + s)
+
+    def end_turn(self):
+        # принудительное завершение хода (пользователь)
+        self.state.current_player = BLACK if self.state.current_player == WHITE else WHITE
+        self.state.dice = ()
+        self.state.dice_used = []
+        self.state.selected = None
+        self.state.valid_moves = []
+        self.info_lbl.config(text="Ход передан")
+        self.redraw()
+
+    def new_game(self):
+        if not self.current_user:
+            messagebox.showwarning("Предупреждение", "Сначала войдите")
+            return
+        self.state = GameState()
+        self.info_lbl.config(text="Новая игра. Бросьте кости.")
+        self.redraw()
+
+    # ---------------- Click handling ----------------
+    def on_click(self, event):
+        if not self.current_user:
+            return
+        px, py = event.x, event.y
+        idx = self.coords_to_point(px, py)
+        if idx is None:
+            return
+        # If no dice rolled
+        if not self.state.dice:
+            self.info_lbl.config(text="Сначала бросьте кости")
+            return
+        # select own piece
+        if self.state.can_move_from(idx):
+            # if there are mandatory moves? In standard short nardy there is no mandatory taking because no hits.
+            self.state.selected = idx
+            self.state.valid_moves = self.state.possible_targets_from(idx)
+            if not self.state.valid_moves:
+                self.info_lbl.config(text="Нет допустимых ходов с этой точки")
+            else:
+                self.info_lbl.config(text=f"Выбрана точка {idx}")
+            self.redraw()
+            return
+        # if target chosen and selected exists
+        if self.state.selected and (idx, ) is not None:
+            # find matching move
+            chosen = None
+            for di, targ in self.state.valid_moves:
+                if targ == idx:
+                    chosen = (di, targ)
+                    break
+            if not chosen:
+                self.info_lbl.config(text="Неверная цель")
+                self.state.selected = None
+                self.state.valid_moves = []
+                self.redraw()
+                return
+            ok = self.state.apply_move(self.state.selected, chosen[1], chosen[0])
+            if ok:
+                self.info_lbl.config(text=f"Ход: {self.state.selected} → {chosen[1] if chosen[1]!=0 else 'вынос'}")
+                winner = self.state.check_game_over()
+                if winner:
+                    messagebox.showinfo("Игра окончена", f"Победили {winner}")
+                    self.redraw()
+                    return
+                if self.state.all_dice_used():
+                    # автоматическая смена хода
+                    self.state.current_player = BLACK if self.state.current_player==WHITE else WHITE
+                    self.state.dice = ()
+                    self.state.dice_used = []
+                    self.info_lbl.config(text="Ход завершён. Следующий игрок.")
+                else:
+                    self.info_lbl.config(text="Используйте оставшиеся кости")
+            else:
+                self.info_lbl.config(text="Ход не выполнен")
+            self.state.selected = None
+            self.state.valid_moves = []
+            self.redraw()
+            return
+
+    # ---------------- Additional helpers ----------------
+    def coords_to_point(self, x, y):
+        layout = self.point_layout()
+        for i in range(1, NUM_POINTS+1):
+            x1,y1,x2,y2 = layout[i]
+            if x1 <= x <= x2 and y1 <= y <= y2:
+                return i
+        return None
+
+# --------------- Запуск ---------------
+def main():
+    root = tk.Tk()
+    app = NardyApp(root)
+    root.mainloop()
+
+if __name__ == "__main__":
+    main()
