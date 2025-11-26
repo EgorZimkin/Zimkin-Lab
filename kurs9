@@ -1,0 +1,310 @@
+from tkinter import *
+import tkinter.messagebox as messagebox
+import random
+import os
+
+# ======================================================
+#   ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ
+# ======================================================
+root = None
+canvas = None
+auth_frame = None
+current_user = None
+
+board = [[] for _ in range(24)]          # 24 пункта
+current_player = "white"                 # white → идёт вперёд (к 24)
+dice_values = []
+moves_left = []
+selected_point = None
+possible_moves = []
+
+CELL_W = 40
+CHECKER_R = 12
+
+
+# ======================================================
+#   ШИФРОВКА ДЛЯ USERS.TXT
+# ======================================================
+def encrypt(text, shift=10):
+    return ''.join(chr(ord(c) + shift) for c in text)
+
+def decrypt(text, shift=10):
+    return ''.join(chr(ord(c) - shift) for c in text)
+
+
+# ======================================================
+#   РЕГИСТРАЦИЯ / АВТОРИЗАЦИЯ
+# ======================================================
+def auth_user(username, password, register=False):
+    if register:
+        # Проверяем существование
+        if os.path.exists("users.txt"):
+            with open("users.txt", "r", encoding="utf-8") as f:
+                for line in f:
+                    login = line.split(":")[0]
+                    if decrypt(login) == username:
+                        return False, "Пользователь уже существует"
+
+        # Создаём
+        with open("users.txt", "a", encoding="utf-8") as f:
+            f.write(f"{encrypt(username)}:{encrypt(password)}\n")
+        return True, "Регистрация успешна"
+
+    else:
+        try:
+            with open("users.txt", "r", encoding="utf-8") as f:
+                for line in f:
+                    login, pwd = line.strip().split(":")
+                    if decrypt(login) == username and decrypt(pwd) == password:
+                        return True, "Вход выполнен"
+            return False, "Неверный логин или пароль"
+        except:
+            return False, "Ошибка файла users.txt"
+
+
+# ======================================================
+#   ОКНО ЛОГИНА / РЕГИСТРАЦИИ
+# ======================================================
+def create_auth_form(register=False):
+    global auth_frame
+    auth_frame = Frame(root, bg="white")
+    auth_frame.pack(fill=BOTH, expand=True)
+
+    title = "Регистрация" if register else "Вход"
+    Label(auth_frame, text=title, font=("Arial", 18, "bold")).pack(pady=20)
+
+    entries = []
+    fields = [("Логин", ""), ("Пароль", "*")]
+    if register:
+        fields.append(("Повтор пароля", "*"))
+
+    for label, sh in fields:
+        Label(auth_frame, text=label).pack()
+        e = Entry(auth_frame, width=25, show=sh)
+        e.pack(pady=5)
+        entries.append(e)
+
+    status = Label(auth_frame, text="", fg="red")
+    status.pack()
+
+    def submit():
+        values = [e.get().strip() for e in entries]
+        if not all(values):
+            status.config(text="Заполните все поля")
+            return
+
+        if register and values[1] != values[2]:
+            status.config(text="Пароли не совпадают", fg="red")
+            return
+
+        ok, msg = auth_user(values[0], values[1], register)
+        status.config(text=msg, fg="green" if ok else "red")
+
+        if ok:
+            global current_user
+            current_user = values[0]
+            auth_frame.pack_forget()
+            canvas.pack()
+            new_game()
+
+    Button(auth_frame, text=title, command=submit, width=20).pack(pady=10)
+    Button(auth_frame,
+           text=("Назад" if register else "Регистрация"),
+           command=lambda: switch_form(register),
+           width=20
+           ).pack()
+
+def switch_form(register):
+    auth_frame.pack_forget()
+    create_auth_form(not register)
+
+
+# ======================================================
+#   ЛОГИКА НАРД
+# ======================================================
+def setup_board():
+    """Расстановка как на твоем фото: белые слева, черные справа"""
+    global board
+    board = [[] for _ in range(24)]
+
+    # Белые на пункте 1 → индекс 0
+    for _ in range(15):
+        board[0].append("white")
+
+    # Черные на пункте 12 → индекс 11
+    for _ in range(15):
+        board[11].append("black")
+
+
+def roll_dice():
+    """Бросок двух костей"""
+    global dice_values, moves_left
+    d1 = random.randint(1, 6)
+    d2 = random.randint(1, 6)
+    dice_values = [d1, d2]
+
+    # Дубль — 4 хода
+    if d1 == d2:
+        moves_left = [d1, d1, d1, d1]
+    else:
+        moves_left = [d1, d2]
+
+    draw_board()
+
+
+def valid_moves_from(point):
+    """Возможные ходы из точки"""
+    global moves_left
+    color = current_player
+
+    # Нет шашек
+    if not board[point]:
+        return []
+
+    # Чужая шашка
+    if board[point][-1] != color:
+        return []
+
+    direction = 1 if color == "white" else -1
+    res = []
+
+    for step in moves_left:
+        end = point + step * direction
+        if 0 <= end < 24:
+            # Нельзя бить → точка должна быть пустой или своя
+            if len(board[end]) == 0 or board[end][-1] == color:
+                res.append(end)
+
+    return res
+
+
+def make_move(start, end):
+    """Совершить ход"""
+    global moves_left, selected_point, possible_moves, current_player
+
+    step = abs(end - start)
+    if step not in moves_left:
+        return
+
+    # перенести шашку
+    board[start].pop()
+    board[end].append(current_player)
+    moves_left.remove(step)
+
+    # если ходы закончились → игрок меняется
+    if not moves_left:
+        current_player = "black" if current_player == "white" else "white"
+
+    selected_point = None
+    possible_moves = []
+    draw_board()
+
+
+def on_click(event):
+    global selected_point, possible_moves
+
+    point = event.x // CELL_W
+    if point < 0 or point > 23:
+        return
+
+    # выбор начала хода
+    if selected_point is None:
+        moves = valid_moves_from(point)
+        if moves:
+            selected_point = point
+            possible_moves = moves
+            draw_board()
+        return
+
+    # выбор конца хода
+    if point in possible_moves:
+        make_move(selected_point, point)
+        return
+
+    # отмена выделения
+    selected_point = None
+    possible_moves = []
+    draw_board()
+
+
+# ======================================================
+#   ОТРИСОВКА ДОСКИ
+# ======================================================
+def draw_board():
+    canvas.delete("all")
+
+    # 24 треугольника как на фото
+    for i in range(24):
+        x1 = i * CELL_W
+        x2 = x1 + CELL_W
+        color = "#e8d7b9" if i % 2 else "#b89d74"
+
+        if i < 12:
+            canvas.create_polygon(x1, 0, x2, 0, x1 + CELL_W / 2, 200, fill=color)
+        else:
+            canvas.create_polygon(x1, 400, x2, 400,
+                                  x1 + CELL_W / 2, 200, fill=color)
+
+    # Подсветка возможных ходов
+    for p in possible_moves:
+        x1 = p * CELL_W
+        canvas.create_rectangle(x1, 0, x1 + CELL_W, 400,
+                                outline="yellow", width=3)
+
+    # Рисуем шашки
+    for p in range(24):
+        stack = board[p]
+        x = p * CELL_W + CELL_W // 2
+
+        if p < 12:
+            y_base = 20
+            step = 22
+        else:
+            y_base = 380
+            step = -22
+
+        for i, color in enumerate(stack):
+            y = y_base + i * step
+            canvas.create_oval(
+                x - CHECKER_R, y - CHECKER_R,
+                x + CHECKER_R, y + CHECKER_R,
+                fill=color
+            )
+
+
+# ======================================================
+#   НОВАЯ ИГРА
+# ======================================================
+def new_game():
+    setup_board()
+    roll_dice()
+    draw_board()
+
+
+# ======================================================
+#   СОЗДАНИЕ GUI
+# ======================================================
+def create_gui():
+    global root, canvas
+    root = Tk()
+    root.title("Длинные НАРДЫ — Курсовая")
+    root.geometry("960x500")
+
+    canvas = Canvas(root, width=960, height=400, bg="#d8c4a8")
+    canvas.bind("<Button-1>", on_click)
+
+    # Кнопки
+    canvas.pack()
+    Button(root, text="Бросить кости", command=roll_dice).pack()
+
+    # Показ формы логина
+    root.after(200, lambda: create_auth_form(False))
+
+    root.mainloop()
+
+
+# ======================================================
+#   ЗАПУСК
+# ======================================================
+if __name__ == "__main__":
+    create_gui()
