@@ -1,0 +1,281 @@
+import tkinter as tk
+from tkinter import messagebox
+import random
+import os
+
+# ---------------------- Пользователи ----------------------
+USERS_FILE = "users.txt"
+
+def encrypt(text, shift=10):
+    return ''.join(chr(ord(c)+shift) for c in text)
+
+def decrypt(text, shift=10):
+    return ''.join(chr(ord(c)-shift) for c in text)
+
+def auth_user(username, password, register=False):
+    try:
+        if register:
+            if os.path.exists(USERS_FILE):
+                with open(USERS_FILE, "r", encoding="utf-8") as f:
+                    for line in f:
+                        if decrypt(line.split(":")[0]) == username:
+                            return False, "Пользователь уже существует"
+            with open(USERS_FILE, "a", encoding="utf-8") as f:
+                f.write(f"{encrypt(username)}:{encrypt(password)}\n")
+            return True, "Регистрация успешна"
+        else:
+            if not os.path.exists(USERS_FILE):
+                return False, "Пользователь не найден"
+            with open(USERS_FILE, "r", encoding="utf-8") as f:
+                for line in f:
+                    parts = line.strip().split(":")
+                    if len(parts)==2 and decrypt(parts[0])==username and decrypt(parts[1])==password:
+                        return True, "Вход успешен"
+            return False, "Неверный логин или пароль"
+    except:
+        return False, "Ошибка файла"
+
+# ---------------------- Настройки игры ----------------------
+NUM_POINTS = 24
+START_POSITIONS = {
+    1:  {'color':'black','count':2},
+    6:  {'color':'white','count':5},
+    8:  {'color':'white','count':3},
+    12: {'color':'black','count':5},
+    13: {'color':'white','count':5},
+    17: {'color':'black','count':3},
+    19: {'color':'black','count':5},
+    24: {'color':'white','count':2}
+}
+
+CELL_RADIUS = 25
+BOARD_WIDTH = 1000
+BOARD_HEIGHT = 400
+
+# ---------------------- Класс игры ----------------------
+class BackgammonGame:
+    def __init__(self):
+        self.board = [{'color': None, 'count':0} for _ in range(NUM_POINTS+1)]
+        self.current_player = 'white'
+        self.dice = []
+        self.selected_point = None
+        self.used_dice = []
+        self.reset_board()
+        self.bar = {'white':0,'black':0}
+
+    def reset_board(self):
+        for i in range(1, NUM_POINTS+1):
+            self.board[i] = {'color': None, 'count': 0}
+        for p, val in START_POSITIONS.items():
+            self.board[p] = val.copy()
+        self.current_player = 'white'
+        self.dice = []
+        self.used_dice = []
+        self.selected_point = None
+        self.bar = {'white':0,'black':0}
+
+    def roll_dice(self):
+        d1 = random.randint(1,6)
+        d2 = random.randint(1,6)
+        if d1==d2:
+            self.dice = [d1]*4
+        else:
+            self.dice = [d1,d2]
+        self.used_dice = []
+        return self.dice
+
+    def switch_player(self):
+        self.current_player = 'black' if self.current_player=='white' else 'white'
+        self.dice = []
+        self.used_dice = []
+        self.selected_point = None
+
+    def can_move_from_bar(self):
+        if self.bar[self.current_player]>0:
+            # белые входят с 1, черные с 24
+            target = 1 if self.current_player=='white' else 24
+            moves = []
+            for die in self.dice:
+                t = target + die if self.current_player=='white' else target - die
+                if 1<=t<=24 and (self.board[t]['color']==self.current_player or self.board[t]['count']<=1):
+                    moves.append(t)
+            return moves
+        return []
+
+    def possible_moves(self, point):
+        moves = []
+        for die in self.dice:
+            if die in self.used_dice:
+                continue
+            target = point + die if self.current_player=='white' else point - die
+            if 1<=target<=24:
+                if self.board[target]['color']==self.current_player or self.board[target]['count']<=1:
+                    moves.append(target)
+        return moves
+
+    def move_piece(self, from_point, to_point):
+        if self.board[from_point]['count']==0:
+            return False
+        piece_color = self.board[from_point]['color']
+        if piece_color != self.current_player:
+            return False
+        dist = abs(to_point - from_point)
+        if dist not in [d for i,d in enumerate(self.dice) if i not in self.used_dice]:
+            return False
+        # Бьем одиночную чужую шашку
+        if self.board[to_point]['color'] != self.current_player and self.board[to_point]['count']==1:
+            enemy = self.board[to_point]['color']
+            self.bar[enemy]+=1
+            self.board[to_point] = {'color':None,'count':0}
+        # Перемещаем шашку
+        self.board[to_point]['color']=piece_color
+        self.board[to_point]['count']+=1
+        self.board[from_point]['count']-=1
+        if self.board[from_point]['count']==0:
+            self.board[from_point]['color']=None
+        # Отметить кубик использованным
+        for i,d in enumerate(self.dice):
+            if i in self.used_dice:
+                continue
+            if d==dist:
+                self.used_dice.append(i)
+                break
+        return True
+
+    def check_win(self):
+        white_total = sum(p['count'] for p in self.board if p['color']=='white') + self.bar['white']
+        black_total = sum(p['count'] for p in self.board if p['color']=='black') + self.bar['black']
+        if white_total==0:
+            return 'white'
+        if black_total==0:
+            return 'black'
+        return None
+
+# ---------------------- GUI ----------------------
+class BackgammonGUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Русские Нарды")
+        self.game = BackgammonGame()
+        self.current_user = None
+
+        # Фреймы
+        self.auth_frame = tk.Frame(root, bg="white")
+        self.auth_frame.pack(fill='both', expand=True)
+        self.board_frame = tk.Frame(root)
+        self.board_frame.pack(fill='both', expand=True)
+        self.board_frame.pack_forget()
+
+        # Канва для доски
+        self.canvas = tk.Canvas(self.board_frame, width=BOARD_WIDTH, height=BOARD_HEIGHT, bg="#DDB67D")
+        self.canvas.pack()
+        self.canvas.bind("<Button-1>", self.on_click)
+
+        # Кубики и инфо
+        self.info_label = tk.Label(self.board_frame, text="", font=("Arial",14))
+        self.info_label.pack()
+        self.roll_button = tk.Button(self.board_frame, text="Бросить кубики", command=self.roll_dice)
+        self.roll_button.pack()
+        self.new_game_btn = tk.Button(self.board_frame, text="Новая игра", command=self.new_game)
+        self.new_game_btn.pack()
+
+        self.create_auth_form()
+
+    def create_auth_form(self, register=False):
+        self.auth_frame.pack(fill='both', expand=True)
+        for widget in self.auth_frame.winfo_children():
+            widget.destroy()
+        title = "Регистрация" if register else "Вход"
+        tk.Label(self.auth_frame, text=title, font=("Arial",16,"bold")).pack(pady=20)
+        username_entry = tk.Entry(self.auth_frame)
+        username_entry.pack(pady=5)
+        password_entry = tk.Entry(self.auth_frame, show="*")
+        password_entry.pack(pady=5)
+        if register:
+            confirm_entry = tk.Entry(self.auth_frame, show="*")
+            confirm_entry.pack(pady=5)
+        status_label = tk.Label(self.auth_frame, text="", fg="red")
+        status_label.pack()
+
+        def submit():
+            username = username_entry.get().strip()
+            password = password_entry.get().strip()
+            if register:
+                confirm = confirm_entry.get().strip()
+                if password!=confirm:
+                    status_label.config(text="Пароли не совпадают")
+                    return
+            success,msg = auth_user(username,password,register)
+            status_label.config(text=msg, fg="green" if success else "red")
+            if success:
+                self.current_user = username
+                self.auth_frame.pack_forget()
+                self.board_frame.pack(fill='both', expand=True)
+                self.update_board()
+
+        def switch():
+            self.create_auth_form(not register)
+
+        tk.Button(self.auth_frame, text=title, command=submit).pack(pady=5)
+        tk.Button(self.auth_frame, text="Назад" if register else "Регистрация", command=switch).pack(pady=5)
+
+    def new_game(self):
+        self.game.reset_board()
+        self.update_board()
+
+    def roll_dice(self):
+        dice = self.game.roll_dice()
+        self.info_label.config(text=f"{self.game.current_player.capitalize()} бросил кубики: {dice}")
+
+    def update_board(self):
+        self.canvas.delete("all")
+        spacing = BOARD_WIDTH//12
+        for i in range(12):
+            x = i*spacing + spacing//2
+            self.draw_point(x,50,i+1)
+            y = BOARD_HEIGHT-50
+            self.draw_point(x,y,24-i)
+        self.info_label.config(text=f"Ход: {self.game.current_player.capitalize()}, кубики: {self.game.dice}")
+
+    def draw_point(self, x, y, point_index):
+        point = self.game.board[point_index]
+        self.canvas.create_polygon(x-20,y, x+20,y, x,y+60 if y<BOARD_HEIGHT//2 else y-60, fill="#A0522D", outline="black")
+        if point['count']>0:
+            for n in range(min(point['count'],5)):
+                cx = x
+                cy = y+10*n if y<BOARD_HEIGHT//2 else y-10*n
+                self.canvas.create_oval(cx-CELL_RADIUS,cy-CELL_RADIUS, cx+CELL_RADIUS,cy+CELL_RADIUS, fill=point['color'], outline="black")
+
+    def on_click(self,event):
+        x = event.x
+        y = event.y
+        spacing = BOARD_WIDTH//12
+        # Определяем пункт по x
+        if y<BOARD_HEIGHT/2:
+            idx = x//spacing +1
+        else:
+            idx = 24 - (x//spacing)
+        idx = int(idx)
+        if self.game.selected_point is None:
+            # Выбираем шашку
+            if self.game.board[idx]['color']==self.game.current_player:
+                self.game.selected_point = idx
+        else:
+            moved = self.game.move_piece(self.game.selected_point, idx)
+            if moved:
+                self.game.selected_point=None
+                self.update_board()
+                winner = self.game.check_win()
+                if winner:
+                    messagebox.showinfo("Игра окончена", f"{winner.capitalize()} выиграли!")
+                    self.game.reset_board()
+                    self.update_board()
+                    return
+                if len(self.game.used_dice)==len(self.game.dice):
+                    self.game.switch_player()
+                    self.update_board()
+
+if __name__=="__main__":
+    root = tk.Tk()
+    app = BackgammonGUI(root)
+    root.mainloop()
