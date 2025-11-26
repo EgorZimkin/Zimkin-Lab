@@ -1,0 +1,413 @@
+import tkinter as tk
+from tkinter import messagebox
+import random
+import os
+from typing import List, Optional
+
+class RussianBackgammon:
+    def __init__(self):
+        self.root = tk.Tk()
+        self.root.title("Русские Нарды - Курсовая работа")
+        self.root.geometry("900x750+200+100")
+        
+        # Глобальные переменные
+        self.current_user = None
+        self.board = [0] * 24
+        self.current_player = 1  # 1 - белые, -1 - черные
+        self.dice = []
+        self.used_dice = []
+        self.selected_checker = None
+        self.game_started = False
+        
+        # Создание интерфейса
+        self.create_gui()
+        self.create_auth_form()
+        
+    def create_gui(self):
+        """Создание основного графического интерфейса"""
+        # Холст для доски
+        self.canvas = tk.Canvas(self.root, width=800, height=500, bg="burlywood")
+        
+        # Информационная панель
+        self.info_frame = tk.Frame(self.root, bg="lightgray", height=50)
+        self.current_player_label = tk.Label(self.info_frame, text="Войдите в игру", 
+                                           font=("Arial", 14, "bold"), bg="lightgray")
+        self.status_label = tk.Label(self.info_frame, text="", font=("Arial", 12), bg="lightgray")
+        
+        # Панель управления
+        self.control_frame = tk.Frame(self.root)
+        self.dice_label = tk.Label(self.control_frame, text="Кости: ", font=("Arial", 14))
+        
+    def create_auth_form(self):
+        """Создание формы авторизации"""
+        self.auth_frame = tk.Frame(self.root, bg="white")
+        self.auth_frame.pack(fill=tk.BOTH, expand=True)
+        
+        title = tk.Label(self.auth_frame, text="РУССКИЕ НАРДЫ", 
+                        font=("Arial", 20, "bold"), fg="darkblue", bg="white")
+        title.pack(pady=20)
+        
+        login_frame = tk.Frame(self.auth_frame, bg="white")
+        login_frame.pack(pady=30)
+        
+        # Поля ввода
+        tk.Label(login_frame, text="Логин:", font=("Arial", 12), bg="white").grid(row=0, column=0, padx=5, pady=5)
+        self.login_entry = tk.Entry(login_frame, font=("Arial", 12), width=15)
+        self.login_entry.grid(row=0, column=1, padx=5, pady=5)
+        
+        tk.Label(login_frame, text="Пароль:", font=("Arial", 12), bg="white").grid(row=1, column=0, padx=5, pady=5)
+        self.password_entry = tk.Entry(login_frame, show="*", font=("Arial", 12), width=15)
+        self.password_entry.grid(row=1, column=1, padx=5, pady=5)
+        
+        # Кнопки
+        btn_frame = tk.Frame(self.auth_frame, bg="white")
+        btn_frame.pack(pady=20)
+        
+        tk.Button(btn_frame, text="Войти", command=self.login, 
+                 font=("Arial", 12), bg="lightgreen", width=12).pack(side=tk.LEFT, padx=10)
+        tk.Button(btn_frame, text="Зарегистрироваться", command=self.register,
+                 font=("Arial", 12), bg="lightblue", width=15).pack(side=tk.LEFT, padx=10)
+        
+        self.auth_status_label = tk.Label(self.auth_frame, text="", font=("Arial", 10), 
+                                         fg="red", bg="white")
+        self.auth_status_label.pack(pady=10)
+        
+        # Привязка Enter
+        self.root.bind('<Return>', lambda e: self.login())
+
+    def encrypt(self, text: str, shift: int = 3) -> str:
+        """Шифрование текста"""
+        return ''.join(chr(ord(char) + shift) for char in text)
+
+    def decrypt(self, text: str, shift: int = 3) -> str:
+        """Расшифровка текста"""
+        return ''.join(chr(ord(char) - shift) for char in text)
+
+    def register(self):
+        """Регистрация нового пользователя"""
+        login = self.login_entry.get().strip()
+        password = self.password_entry.get().strip()
+        
+        if not login or not password:
+            self.auth_status_label.config(text="Заполните все поля!")
+            return
+            
+        try:
+            if os.path.exists("users.txt"):
+                with open("users.txt", "r", encoding="utf-8") as f:
+                    for line in f:
+                        parts = line.strip().split(":")
+                        if len(parts) == 2 and self.decrypt(parts[0]) == login:
+                            self.auth_status_label.config(text="Пользователь уже существует!")
+                            return
+            
+            with open("users.txt", "a", encoding="utf-8") as f:
+                encrypted_login = self.encrypt(login)
+                encrypted_pass = self.encrypt(password)
+                f.write(f"{encrypted_login}:{encrypted_pass}\n")
+                
+            self.auth_status_label.config(text="Регистрация успешна! Можете войти.", fg="green")
+            
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Ошибка регистрации: {str(e)}")
+
+    def login(self):
+        """Авторизация пользователя"""
+        login = self.login_entry.get().strip()
+        password = self.password_entry.get().strip()
+        
+        if not login or not password:
+            self.auth_status_label.config(text="Заполните все поля!")
+            return
+            
+        try:
+            if not os.path.exists("users.txt"):
+                self.auth_status_label.config(text="Файл пользователей не найден!")
+                return
+                
+            with open("users.txt", "r", encoding="utf-8") as f:
+                for line in f:
+                    parts = line.strip().split(":")
+                    if len(parts) == 2:
+                        stored_login = self.decrypt(parts[0])
+                        stored_pass = self.decrypt(parts[1])
+                        if stored_login == login and stored_pass == password:
+                            self.current_user = login
+                            self.start_game()
+                            return
+                
+            self.auth_status_label.config(text="Неверный логин или пароль!")
+            
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Ошибка авторизации: {str(e)}")
+
+    def start_game(self):
+        """Начало игры после авторизации"""
+        self.game_started = True
+        self.setup_board()
+        self.show_game_interface()
+        self.roll_dice()
+
+    def setup_board(self):
+        """Начальная расстановка доски для русских нард"""
+        self.board = [0] * 24
+        # Белые шашки (игрок 1)
+        self.board[0] = self.board[11] = self.board[16] = self.board[18] = -2
+        # Черные шашки (игрок 2)  
+        self.board[5] = self.board[7] = self.board[12] = self.board[23] = 2
+
+    def show_game_interface(self):
+        """Показать игровой интерфейс"""
+        self.auth_frame.pack_forget()
+        
+        # Информационная панель
+        self.info_frame.pack(fill=tk.X, padx=10, pady=5)
+        self.current_player_label.pack(side=tk.LEFT, padx=10)
+        self.status_label.pack(side=tk.LEFT, padx=10)
+        
+        # Игровое поле
+        self.canvas.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
+        self.canvas.bind("<Button-1>", self.on_canvas_click)
+        
+        # Панель управления
+        self.control_frame.pack(pady=10)
+        self.dice_label.pack(side=tk.LEFT, padx=10)
+        
+        tk.Button(self.control_frame, text="Бросить кости", command=self.roll_dice,
+                 font=("Arial", 12), bg="lightyellow").pack(side=tk.LEFT, padx=5)
+        
+        tk.Button(self.control_frame, text="Новая игра", command=self.new_game,
+                 font=("Arial", 12), bg="lightgreen").pack(side=tk.LEFT, padx=5)
+        
+        self.update_status()
+        self.draw_board()
+
+    def draw_board(self):
+        """Отрисовка игрового поля"""
+        self.canvas.delete("all")
+        
+        # Основной фон доски
+        self.canvas.create_rectangle(50, 50, 750, 450, fill="burlywood", outline="black", width=3)
+        
+        # Рисуем 24 треугольника (пункта)
+        for i in range(12):
+            # Верхний ряд (пункты 12-1)
+            x1 = 100 + i * 50
+            x2 = x1 + 25
+            x3 = x1 + 50
+            color = "white" if i % 2 == 0 else "black"
+            self.canvas.create_polygon(x1, 50, x2, 200, x3, 50, fill=color, outline="black")
+            
+            # Нижний ряд (пункты 13-24)
+            self.canvas.create_polygon(x1, 450, x2, 300, x3, 450, fill=color, outline="black")
+        
+        # Рисуем шашки
+        self.draw_checkers()
+        
+        # Подписи пунктов
+        for i in range(12):
+            # Верхний ряд
+            self.canvas.create_text(125 + i * 50, 30, text=str(12-i), font=("Arial", 10, "bold"))
+            # Нижний ряд
+            self.canvas.create_text(125 + i * 50, 470, text=str(13+i), font=("Arial", 10, "bold"))
+
+    def draw_checkers(self):
+        """Отрисовка шашек на доске"""
+        for i in range(24):
+            count = abs(self.board[i])
+            player = -1 if self.board[i] < 0 else 1
+            
+            if count > 0:
+                for j in range(min(count, 5)):  # Максимум 5 шашек в столбце
+                    if i < 12:  # Верхняя половина доски
+                        x = 125 + i * 50
+                        y = 70 + j * 20
+                    else:  # Нижняя половина доски
+                        x = 125 + (23 - i) * 50
+                        y = 430 - j * 20
+                    
+                    color = "white" if player == 1 else "black"
+                    outline = "black" if player == 1 else "white"
+                    
+                    self.canvas.create_oval(x-15, y-15, x+15, y+15, 
+                                          fill=color, outline=outline, width=2)
+
+    def roll_dice(self):
+        """Бросок игральных костей"""
+        if not self.game_started:
+            return
+            
+        self.dice = [random.randint(1, 6), random.randint(1, 6)]
+        self.used_dice = []
+        
+        # Если выпал дубль, получаем 4 хода
+        if self.dice[0] == self.dice[1]:
+            self.dice = self.dice * 2
+            
+        self.update_status()
+        self.draw_board()
+
+    def on_canvas_click(self, event):
+        """Обработка клика по доске"""
+        if not self.dice:
+            return
+            
+        pos = self.get_position_from_click(event.x, event.y)
+        if pos is not None:
+            self.handle_checker_click(pos)
+
+    def get_position_from_click(self, x: int, y: int) -> Optional[int]:
+        """Определение номера пункта по координатам клика"""
+        if 50 <= y <= 200:  # Верхний ряд
+            for i in range(12):
+                if 100 + i * 50 <= x <= 150 + i * 50:
+                    return i
+        elif 300 <= y <= 450:  # Нижний ряд
+            for i in range(12):
+                if 100 + i * 50 <= x <= 150 + i * 50:
+                    return 23 - i
+        return None
+
+    def handle_checker_click(self, pos: int):
+        """Обработка клика по шашке"""
+        if self.selected_checker is None:
+            # Выбор шашки для хода
+            if self.board[pos] * self.current_player > 0:
+                self.selected_checker = pos
+                self.highlight_position(pos)
+                self.status_label.config(text="Выберите куда ходить")
+        else:
+            # Попытка сделать ход
+            if self.is_valid_move(self.selected_checker, pos):
+                self.make_move(self.selected_checker, pos)
+                self.selected_checker = None
+                self.check_game_end()
+            else:
+                self.selected_checker = None
+                self.status_label.config(text="Неверный ход!")
+            self.draw_board()
+
+    def highlight_position(self, pos: int):
+        """Подсветка выбранной позиции"""
+        self.draw_board()
+        if pos < 12:
+            x = 125 + pos * 50
+            y = 70
+        else:
+            x = 125 + (23 - pos) * 50
+            y = 430
+            
+        self.canvas.create_oval(x-20, y-20, x+20, y+20, outline="red", width=3)
+
+    def is_valid_move(self, from_pos: int, to_pos: int) -> bool:
+        """Проверка валидности хода"""
+        if not self.dice:
+            return False
+            
+        # Проверяем принадлежность шашки
+        if self.board[from_pos] * self.current_player <= 0:
+            return False
+            
+        # Вычисляем расстояние
+        if self.current_player == 1:
+            distance = to_pos - from_pos
+        else:
+            distance = from_pos - to_pos
+            
+        if distance <= 0:
+            return False
+            
+        # Проверяем доступность хода по костям
+        if distance not in self.dice and distance not in self.used_dice:
+            return False
+            
+        # Проверяем пункт назначения (нельзя ставить на свой пункт с 2+ шашками)
+        if self.board[to_pos] * self.current_player < 0 and abs(self.board[to_pos]) > 1:
+            return False
+            
+        return True
+
+    def make_move(self, from_pos: int, to_pos: int):
+        """Выполнение хода"""
+        distance = abs(to_pos - from_pos)
+        
+        # Убираем использованную кость
+        if distance in self.dice:
+            self.dice.remove(distance)
+            self.used_dice.append(distance)
+        else:
+            self.used_dice.remove(distance)
+        
+        # Перемещаем шашку
+        if self.board[from_pos] > 0:
+            self.board[from_pos] -= 1
+        else:
+            self.board[from_pos] += 1
+            
+        if self.board[to_pos] >= 0:
+            self.board[to_pos] += 1
+        else:
+            self.board[to_pos] -= 1
+        
+        # Если сбили шашку противника (одиночная шашка)
+        if self.board[to_pos] == 0:
+            self.board[to_pos] = self.current_player
+        
+        # Проверяем окончание хода
+        if not self.dice:
+            self.current_player *= -1
+            self.roll_dice()
+        
+        self.update_status()
+
+    def update_status(self):
+        """Обновление статусной информации"""
+        player_text = "Белые" if self.current_player == 1 else "Черные"
+        user_text = f"Игрок: {self.current_user}" if self.current_player == 1 else "Игрок 2"
+        
+        self.current_player_label.config(text=f"{user_text} | Ход: {player_text}")
+        
+        dice_text = f"Кости: {self.dice}"
+        if self.used_dice:
+            dice_text += f" | Использовано: {self.used_dice}"
+        self.dice_label.config(text=dice_text)
+        
+        if not self.dice:
+            self.status_label.config(text="Бросьте кости!")
+        elif self.selected_checker is None:
+            self.status_label.config(text="Выберите шашку для хода")
+
+    def check_game_end(self):
+        """Проверка окончания игры"""
+        # Игрок выигрывает, когда все его шашки в доме
+        white_home = list(range(18, 24))  # Дом белых: пункты 19-24
+        black_home = list(range(0, 6))    # Дом черных: пункты 1-6
+        
+        white_win = all(self.board[i] <= 0 for i in white_home)
+        black_win = all(self.board[i] >= 0 for i in black_home)
+        
+        if white_win:
+            messagebox.showinfo("Игра окончена", "Белые выиграли!")
+            self.new_game()
+        elif black_win:
+            messagebox.showinfo("Игра окончена", "Черные выиграли!")
+            self.new_game()
+
+    def new_game(self):
+        """Начало новой игры"""
+        self.setup_board()
+        self.current_player = 1
+        self.selected_checker = None
+        self.dice = []
+        self.used_dice = []
+        self.roll_dice()
+        self.draw_board()
+
+    def run(self):
+        """Запуск приложения"""
+        self.root.mainloop()
+
+# Создание и запуск игры
+if __name__ == "__main__":
+    game = RussianBackgammon()
+    game.run()
