@@ -1,15 +1,1 @@
-def is_octal(num):
-    return all('0' <= ch <= '7' for ch in num) #проверяет, является ли число восьмеричным
-with open("input.txt") as f:
-    numbers = []
-    results = []
-    for token in f.read().split():
-        if is_octal(token):
-            dec = int(token, 8)
-            if dec <= 1023 and len(token) > 1 and token[-2] == '1': #не превышает ли 1024, предпосл. цифра = 1
-                results.append(token[:-2])
-                numbers.append(dec)
-    if results:
-        print(" ".join(results))
-    if numbers:
-        print(f"Среднее: {(min(numbers) + max(numbers)) / 2:.1f}") # он ищет среднее из чисел которые удовлетворяют условию
+
