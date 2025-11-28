@@ -1,0 +1,279 @@
+import tkinter as tk
+from tkinter import messagebox
+import hashlib
+import random
+
+USERS_FILE = "users.txt"
+
+# ---------- Работа с пользователями ----------
+
+def hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+
+def load_users():
+    users = {}
+    try:
+        with open(USERS_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                login, pwd_hash = line.split(";")
+                users[login] = pwd_hash
+    except FileNotFoundError:
+        pass
+    return users
+
+def save_user(login: str, pwd_hash: str):
+    with open(USERS_FILE, "a", encoding="utf-8") as f:
+        f.write(f"{login};{pwd_hash}\n")
+
+# ---------- Окно авторизации / регистрации ----------
+
+class LoginWindow:
+    def __init__(self):
+        self.root = tk.Tk()
+        self.root.title("Нарды - Вход")
+
+        tk.Label(self.root, text="Логин:").grid(row=0, column=0, padx=5, pady=5)
+        tk.Label(self.root, text="Пароль:").grid(row=1, column=0, padx=5, pady=5)
+
+        self.login_entry = tk.Entry(self.root)
+        self.pass_entry = tk.Entry(self.root, show="*")
+
+        self.login_entry.grid(row=0, column=1, padx=5, pady=5)
+        self.pass_entry.grid(row=1, column=1, padx=5, pady=5)
+
+        self.btn_login = tk.Button(self.root, text="Вход", command=self.login)
+        self.btn_reg   = tk.Button(self.root, text="Регистрация", command=self.open_reg_window)
+
+        self.btn_login.grid(row=2, column=0, padx=5, pady=5)
+        self.btn_reg.grid(row=2, column=1, padx=5, pady=5)
+
+        self.root.mainloop()
+
+    def login(self):
+        login = self.login_entry.get().strip()
+        password = self.pass_entry.get()
+
+        users = load_users()
+        if login not in users:
+            messagebox.showerror("Ошибка", "Пользователь не найден")
+            return
+
+        if users[login] != hash_password(password):
+            messagebox.showerror("Ошибка", "Неверный пароль")
+            return
+
+        messagebox.showinfo("Успех", f"Добро пожаловать, {login}!")
+        self.root.destroy()
+        GameWindow(login)
+
+    def open_reg_window(self):
+        RegWindow(self.root)
+
+class RegWindow:
+    def __init__(self, parent):
+        self.top = tk.Toplevel(parent)
+        self.top.title("Регистрация")
+
+        tk.Label(self.top, text="Логин:").grid(row=0, column=0, padx=5, pady=5)
+        tk.Label(self.top, text="Пароль:").grid(row=1, column=0, padx=5, pady=5)
+        tk.Label(self.top, text="Повтор пароля:").grid(row=2, column=0, padx=5, pady=5)
+
+        self.login_entry = tk.Entry(self.top)
+        self.pass1_entry = tk.Entry(self.top, show="*")
+        self.pass2_entry = tk.Entry(self.top, show="*")
+
+        self.login_entry.grid(row=0, column=1, padx=5, pady=5)
+        self.pass1_entry.grid(row=1, column=1, padx=5, pady=5)
+        self.pass2_entry.grid(row=2, column=1, padx=5, pady=5)
+
+        tk.Button(self.top, text="Зарегистрироваться",
+                  command=self.register).grid(row=3, column=0, columnspan=2, pady=10)
+
+    def register(self):
+        login = self.login_entry.get().strip()
+        p1 = self.pass1_entry.get()
+        p2 = self.pass2_entry.get()
+
+        if not login or not p1:
+            messagebox.showerror("Ошибка", "Логин и пароль не должны быть пустыми")
+            return
+        if p1 != p2:
+            messagebox.showerror("Ошибка", "Пароли не совпадают")
+            return
+
+        users = load_users()
+        if login in users:
+            messagebox.showerror("Ошибка", "Такой логин уже существует")
+            return
+
+        save_user(login, hash_password(p1))
+        messagebox.showinfo("Успех", "Пользователь зарегистрирован")
+        self.top.destroy()
+
+# ---------- Игровая логика длинных нард (упрощённо) ----------
+
+class GameState:
+    def __init__(self):
+        # 24 пункта, в каждом: количество белых и чёрных шашек
+        # Для простоты: белые начинают с позиции 0, чёрные с 12 (пример схемы)
+        self.points = [[0, 0] for _ in range(24)]
+        # пример начальной расстановки: по 15 шашек в своих углах
+        self.points[0][0] = 15   # 0 — белые
+        self.points[12][1] = 15  # 1 — чёрные
+
+        self.current_player = 0  # 0 — белые, 1 — чёрные
+        self.dice = (0, 0)
+
+    def roll_dice(self):
+        d1 = random.randint(1, 6)
+        d2 = random.randint(1, 6)
+        self.dice = (d1, d2)
+        return self.dice
+
+    def can_move(self, from_pos, steps):
+        # простая проверка: есть шашка игрока и не выходим за границы
+        white, black = self.points[from_pos]
+        if self.current_player == 0 and white == 0:
+            return False
+        if self.current_player == 1 and black == 0:
+            return False
+
+        if self.current_player == 0:
+            to_pos = (from_pos + steps) % 24
+        else:
+            to_pos = (from_pos - steps) % 24
+
+        # длинные нарды без съеданий, можно вставать на свои шашки
+        return True
+
+    def move(self, from_pos, steps):
+        if not self.can_move(from_pos, steps):
+            return False
+
+        if self.current_player == 0:
+            to_pos = (from_pos + steps) % 24
+            self.points[from_pos][0] -= 1
+            self.points[to_pos][0] += 1
+        else:
+            to_pos = (from_pos - steps) % 24
+            self.points[from_pos][1] -= 1
+            self.points[to_pos][1] += 1
+        return True
+
+# ---------- Окно игры ----------
+
+class GameWindow:
+    def __init__(self, login):
+        self.login = login
+        self.root = tk.Tk()
+        self.root.title(f"Нарды (длинные) - {login}")
+
+        self.state = GameState()
+
+        self.info_label = tk.Label(self.root, text="Ход белых")
+        self.info_label.pack(pady=5)
+
+        self.dice_label = tk.Label(self.root, text="Кости: -")
+        self.dice_label.pack(pady=5)
+
+        self.btn_roll = tk.Button(self.root, text="Бросить кости", command=self.roll_dice)
+        self.btn_roll.pack(pady=5)
+
+        self.canvas = tk.Canvas(self.root, width=600, height=300, bg="burlywood")
+        self.canvas.pack(padx=10, pady=10)
+
+        self.btn_new = tk.Button(self.root, text="Новая партия", command=self.new_game)
+        self.btn_new.pack(pady=5)
+
+        self.selected_point = None
+        self.canvas.bind("<Button-1>", self.on_canvas_click)
+
+        self.draw_board()
+        self.root.mainloop()
+
+    def draw_board(self):
+        self.canvas.delete("all")
+        # 24 пункта в один ряд (упрощённое поле)
+        width = 600
+        height = 300
+        point_width = width / 24
+
+        # рисуем «пункты»
+        for i in range(24):
+            x1 = i * point_width
+            x2 = x1 + point_width
+            if i < 12:
+                y1, y2 = 0, height / 2
+            else:
+                y1, y2 = height / 2, height
+            self.canvas.create_rectangle(x1, y1, x2, y2, outline="black")
+
+            # шашки
+            white, black = self.state.points[i]
+            # белые сверху, чёрные снизу (условно)
+            for k in range(white):
+                self.canvas.create_oval(
+                    x1 + 5, y1 + 5 + k * 10,
+                    x2 - 5, y1 + 15 + k * 10,
+                    fill="white"
+                )
+            for k in range(black):
+                self.canvas.create_oval(
+                    x1 + 5, y2 - 15 - k * 10,
+                    x2 - 5, y2 - 5 - k * 10,
+                    fill="black"
+                )
+
+        if self.selected_point is not None:
+            x1 = self.selected_point * point_width
+            x2 = x1 + point_width
+            self.canvas.create_rectangle(
+                x1, 0, x2, height,
+                outline="red", width=3
+            )
+
+    def roll_dice(self):
+        d1, d2 = self.state.roll_dice()
+        self.dice_label.config(text=f"Кости: {d1} и {d2}")
+
+    def on_canvas_click(self, event):
+        # определяем, какой пункт выбран
+        width = 600
+        point_width = width / 24
+        point = int(event.x // point_width)
+
+        # если ещё не выбрали исходный пункт — выбираем
+        if self.selected_point is None:
+            self.selected_point = point
+        else:
+            # попытка сделать ход: используем сумму костей (упрощённо)
+            steps = sum(self.state.dice) if self.state.dice != (0, 0) else 0
+            if steps == 0:
+                messagebox.showwarning("Ход невозможен", "Сначала бросьте кости")
+            else:
+                if self.state.move(self.selected_point, steps):
+                    # смена игрока
+                    self.state.current_player = 1 - self.state.current_player
+                    if self.state.current_player == 0:
+                        self.info_label.config(text="Ход белых")
+                    else:
+                        self.info_label.config(text="Ход чёрных")
+                else:
+                    messagebox.showwarning("Ход невозможен", "Некорректный ход")
+            self.selected_point = None
+        self.draw_board()
+
+    def new_game(self):
+        self.state = GameState()
+        self.info_label.config(text="Ход белых")
+        self.dice_label.config(text="Кости: -")
+        self.selected_point = None
+        self.draw_board()
+
+# ---------- Запуск ----------
+
+if __name__ == "__main__":
+    LoginWindow()
